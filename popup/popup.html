@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <title>TabMax</title>
+    <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+
+    <header>
+        <h1>TabMax</h1>
+    </header>
+
+    <div class="actions">
+        <button id="save-session-btn">New Session</button>
+        <button id="new-folder-btn">New Folder</button>
+    </div>
+
+    <div id="content">
+        <!-- Folders & Sessions will be rendered here -->
+        <div id="folder-list"></div>
+
+        <!-- Session detail view -->
+        <div id="session-detail" style="margin-top:12px; display:none;">
+            <h3 id="session-detail-title"></h3>
+            <div id="session-tabs-list"></div>
+        </div>
+    </div>
+
+    <!-- load storage as a global script -->
+    <script src="../storage.js"></script>
+    <script src="popup.js"></script>
+</body>
+</html>
