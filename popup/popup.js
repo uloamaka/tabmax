@@ -1,3 +1,5 @@
+import { getFolders } from "../storage";
+
 const folderListEl = document.getElementById("folder-list");
 const saveSessionBtn = document.getElementById("save-session-btn");
 const newFolderBtn = document.getElementById("new-folder-btn");
@@ -104,4 +106,3 @@ newFolderBtn.onclick = async () => {
 };
 
 renderFolders();
-
