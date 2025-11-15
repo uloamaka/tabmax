@@ -1,4 +1,7 @@
-importScripts("storage.js");
+import {
+    createFolder, saveSession, setActiveSession, getActiveSession,
+    getSessionsInFolder, updateTabInActiveSession, removeTabFromActiveSession
+} from "./storage.js";
 
 let isRestoring = false;
 let restoreHasRun = false;
@@ -13,20 +16,24 @@ function getFavicon(url) {
 }
 
 async function saveCurrentSession(folderName, sessionName) {
-    return new Promise(resolve => {
-        chrome.tabs.query({ currentWindow: true }, async (tabs) => {
-            const formatted = tabs.map(tab => ({
-                id: tab.id,
-                url: tab.url || "",
-                title: tab.title || "",
-                favicon: tab.favIconUrl || getFavicon(tab.url),
-                active: !!tab.active
-            }));
+    try {
+        const tabs = await chrome.tabs.query({ currentWindow: true });
 
-            await saveSession(folderName, sessionName, formatted);
-            resolve({ success: true });
-        });
-    });
+        const formatted = tabs.map(tab => ({
+            id: tab.id,
+            url: tab.url || "",
+            title: tab.title || "",
+            favicon: tab.favIconUrl || getFavicon(tab.url),
+            active: !!tab.active
+        }));
+
+        await saveSession(folderName, sessionName, formatted);
+        return { success: true };
+
+    } catch (e) {
+        console.error("Error saving session:", e);
+        return { success: false, error: e.message };
+    }
 }
 
 async function restoreSession(folderName, sessionName) {
@@ -39,32 +46,28 @@ async function restoreSession(folderName, sessionName) {
 
         const win = await chrome.windows.getCurrent();
         const existingTabs = await chrome.tabs.query({ windowId: win.id });
-
-        if (existingTabs.length > 1) {
-            const toRemove = existingTabs.slice(1).map(t => t.id);
+        
+        const firstTabId = existingTabs[0].id;
+        
+        const toRemove = existingTabs.slice(1).map(t => t.id).filter(id => id !== firstTabId);
+        
+        if (toRemove.length > 0) {
             await chrome.tabs.remove(toRemove);
+        }
 
-            chrome.tabs.update(existingTabs[0].id, { url: tabs[0].url, active: true });
-
-            for (let i = 1; i < tabs.length; i++) {
-                if (!tabs[i].url || tabs[i].url.startsWith("chrome://")) continue;
-                await chrome.tabs.create({ url: tabs[i].url, windowId: win.id, active: false });
-            }
-        } else {
-            chrome.tabs.update(existingTabs[0].id, { url: tabs[0].url, active: true });
-
-            for (let i = 1; i < tabs.length; i++) {
-                if (!tabs[i].url || tabs[i].url.startsWith("chrome://")) continue;
-                await chrome.tabs.create({ url: tabs[i].url, windowId: win.id, active: false });
-            }
+        await chrome.tabs.update(firstTabId, { url: tabs[0].url, active: true });
+        
+        for (let i = 1; i < tabs.length; i++) {
+            if (!tabs[i].url || tabs[i].url.startsWith("chrome://") || tabs[i].url.startsWith("chrome-extension://")) continue; 
+            await chrome.tabs.create({ url: tabs[i].url, windowId: win.id, active: false });
         }
 
         const { lastActiveTabIndex } = await chrome.storage.local.get("lastActiveTabIndex");
-        const index = lastActiveTabIndex ?? 0;
+        const indexToActivate = lastActiveTabIndex ?? 0;
 
         const newList = await chrome.tabs.query({ windowId: win.id });
-        if (newList[index]) {
-            chrome.tabs.update(newList[index].id, { active: true });
+        if (newList[indexToActivate]) {
+            chrome.tabs.update(newList[indexToActivate].id, { active: true });
         }
 
         await setActiveSession(folderName, sessionName);
@@ -93,66 +96,94 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (msg.type === "SAVE_SESSION") {
-        (async () => {
+    let handled = false; 
+    
+    (async () => {
+        if (msg.type === "SAVE_SESSION") {
             await createFolder(msg.folderName);
             const res = await saveCurrentSession(msg.folderName, msg.sessionName);
             if (msg.setActive) await setActiveSession(msg.folderName, msg.sessionName);
             sendResponse(res);
-        })();
-        return true;
-    }
-
-    if (msg.type === "RESTORE_SESSION") {
-        (async () => {
+            handled = true;
+        }
+    
+        if (msg.type === "RESTORE_SESSION") {
             await setActiveSession(msg.folderName, msg.sessionName);
             await restoreSession(msg.folderName, msg.sessionName);
             sendResponse({ success: true });
-        })();
-        return true;
-    }
-
-    if (msg.type === "SET_ACTIVE_SESSION") {
-        (async () => {
+            handled = true;
+        }
+    
+        if (msg.type === "SET_ACTIVE_SESSION") {
             await setActiveSession(msg.folderName, msg.sessionName);
             sendResponse({ success: true });
-        })();
-        return true;
-    }
+            handled = true;
+        }
+        
+        if (handled) return;
+    })();
+
+    return true; 
 });
 
 chrome.tabs.onCreated.addListener(tab => {
-    if (isRestoring) return;
-    try { addTabToActiveSession(tab); } catch {}
+    if (isRestoring) return; 
+    if (tab.url && (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://'))) return;
+
+    try { 
+        updateTabInActiveSession(tab); 
+    } catch (e) {
+        console.error("Autosave onCreated failed:", e);
+    }
 });
 
 chrome.tabs.onActivated.addListener(async ({ tabId }) => {
     if (isRestoring) return;
 
     chrome.tabs.get(tabId, (tab) => {
-        try { updateTabInActiveSession(tab); } catch {}
+        try { 
+            if (tab && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
+                updateTabInActiveSession(tab); 
+            }
+        } catch (e) {
+            console.error("Autosave onActivated update failed:", e);
+        }
     });
 
-    const active = await getActiveSession();
-    if (!active) return;
+    try {
+        const active = await getActiveSession();
+        if (!active) return;
 
-    const sessions = await getSessionsInFolder(active.folder);
-    const sessionTabs = sessions[active.session] || [];
-    const idx = sessionTabs.findIndex(t => t.id === tabId);
+        const sessions = await getSessionsInFolder(active.folder);
+        const sessionTabs = sessions[active.session] || [];
+        const idx = sessionTabs.findIndex(t => t.id === tabId);
 
-    if (idx !== -1) {
-        chrome.storage.local.set({ lastActiveTabIndex: idx });
+        if (idx !== -1) {
+            chrome.storage.local.set({ lastActiveTabIndex: idx });
+        }
+    } catch (e) {
+        console.error("Saving active index failed:", e);
     }
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (isRestoring) return;
     if (changeInfo.status === "complete" || changeInfo.title || changeInfo.favIconUrl) {
-        try { updateTabInActiveSession(tab); } catch {}
+        try { 
+            if (!tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
+                updateTabInActiveSession(tab); 
+            }
+        } catch (e) {
+            console.error("Autosave onUpdated failed:", e);
+        }
     }
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
     if (isRestoring) return;
-    try { removeTabFromActiveSession(tabId); } catch {}
+    try { 
+        removeTabFromActiveSession(tabId); 
+    } catch (e) {
+        console.error("Autosave onRemoved failed:", e);
+    }
 });

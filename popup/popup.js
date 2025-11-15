@@ -104,3 +104,4 @@ newFolderBtn.onclick = async () => {
 };
 
 renderFolders();
+

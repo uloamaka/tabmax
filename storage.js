@@ -106,7 +106,8 @@ function findTabIndexByIdOrUrl(sessionTabs, tab) {
     return -1;
 }
 
-async function addTabToActiveSession(tab) {
+
+async function updateTabInActiveSession(tab) {
     const active = await getActiveSession();
     if (!active) return;
 
@@ -159,3 +160,9 @@ async function removeTabFromActiveSession(tabId) {
     folders[folder].sessions[session] = sessionTabs;
     await saveFolders(folders);
 }
+
+export {
+    getAllFolders, saveFolders, createFolder, getFolders, saveSession,
+    deleteSession, deleteFolder, getSessionsInFolder, setActiveSession,
+    getActiveSession, updateTabInActiveSession, removeTabFromActiveSession
+};
