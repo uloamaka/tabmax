@@ -1,6 +1,8 @@
 import {
     createFolder, saveSession, setActiveSession, getActiveSession,
-    getSessionsInFolder, updateTabInActiveSession, removeTabFromActiveSession
+    getSessionsInFolder, updateTabInActiveSession, removeTabFromActiveSession,
+    deleteFolder,
+    deleteSession
 } from "./storage.js";
 
 let isRestoring = false;
@@ -119,6 +121,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             sendResponse({ success: true });
             handled = true;
         }
+        if (msg.type === "DELETE_FOLDER") {
+            await deleteFolder(msg.folderName);
+            sendResponse({ success: true });
+            handled = true;
+        }
+
+        if (msg.type === "DELETE_SESSION") {
+            await deleteSession(msg.folderName, msg.sessionName);
+            sendResponse({ success: true });
+            handled = true;
+        }
+
         
         if (handled) return;
     })();

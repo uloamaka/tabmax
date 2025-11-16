@@ -1,50 +1,29 @@
 body {
+    background: #1f1f1f;
+    color: #e5e7eb;
+    font-family: sans-serif;
     width: 350px;
-    margin: 0;
     padding: 10px;
-    font-family: Arial, sans-serif;
-    background: #ffffff;
 }
 
-header h1 {
-    font-size: 16px;
-    margin-bottom: 10px;
-    text-align: center;
+.view {
+    display: block;
 }
 
-.actions {
-    display: flex;
-    justify-content: space-between;
-    margin-bottom: 15px;
-}
-
-button {
+.btn {
+    background: #4f46e5;
+    color: white;
+    border: none;
     padding: 6px 10px;
-    font-size: 12px;
+    border-radius: 6px;
     cursor: pointer;
-}
-
-#folder-list {
-    margin-top: 10px;
-}
-
-.folder {
     margin-bottom: 8px;
 }
 
-.folder-title {
-    font-weight: bold;
-    cursor: pointer;
-    margin-bottom: 4px;
+.btn.back {
+    background: #555;
 }
 
-.session-item {
-    padding-left: 10px;
-    display: flex;
-    justify-content: space-between;
-    margin-bottom: 3px;
-}
-
-.session-actions button {
-    margin-left: 4px;
+.folder-list div {
+    margin-bottom: 6px;
 }

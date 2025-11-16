@@ -1,34 +1,30 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <meta charset="UTF-8" />
-    <title>TabMax</title>
-    <link rel="stylesheet" href="popup.css" />
+    <meta charset="utf-8">
+    <title>tabmax</title>
+    <link rel="stylesheet" href="popup.css">
 </head>
+
 <body>
+<div id="mainView" class="view">
+    <div id="activeSessionStatus" class="status"></div>
 
-    <header>
-        <h1>TabMax</h1>
-    </header>
+    <button id="newFolderBtn" class="btn">+ New Folder</button>
 
-    <div class="actions">
-        <button id="save-session-btn">New Session</button>
-        <button id="new-folder-btn">New Folder</button>
-    </div>
+    <div id="folderList" class="folder-list"></div>
+</div>
 
-    <div id="content">
-        <!-- Folders & Sessions will be rendered here -->
-        <div id="folder-list"></div>
+<div id="sessionDetailView" class="view" style="display:none;">
+    <button id="backToFoldersBtn" class="btn back">Back</button>
 
-        <!-- Session detail view -->
-        <div id="session-detail" style="margin-top:12px; display:none;">
-            <h3 id="session-detail-title"></h3>
-            <div id="session-tabs-list"></div>
-        </div>
-    </div>
+    <h2 id="sessionDetailTitle"></h2>
 
-    <!-- load storage as a global script -->
-    <script src="../storage.js" type="module"></script>
-    <script src="popup.js" type="module"></script>
+    <button id="restoreDetailBtn" class="btn">Restore This Session</button>
+
+    <ul id="sessionTabsList"></ul>
+</div>
+
+<script type="module" src="popup.js"></script>
 </body>
 </html>

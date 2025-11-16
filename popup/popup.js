@@ -1,108 +1,188 @@
-import { getFolders } from "../storage";
+document.addEventListener("DOMContentLoaded", () => {
+    const mainView = document.getElementById("mainView");
+    const sessionDetailView = document.getElementById("sessionDetailView");
+    const folderListEl = document.getElementById("folderList");
+    const sessionDetailTitleEl = document.getElementById("sessionDetailTitle");
+    const sessionTabsListEl = document.getElementById("sessionTabsList");
+    const saveSessionBtn = document.getElementById("saveSessionBtn"); 
+    const newFolderBtn = document.getElementById("newFolderBtn");
+    const activeSessionStatusEl = document.getElementById("activeSessionStatus");
+    const backToFoldersBtn = document.getElementById("backToFoldersBtn");
+    const restoreDetailBtn = document.getElementById("restoreDetailBtn");
 
-const folderListEl = document.getElementById("folder-list");
-const saveSessionBtn = document.getElementById("save-session-btn");
-const newFolderBtn = document.getElementById("new-folder-btn");
+    let currentActiveSession = null;
+    let activeSessionContext = { folder: null, session: null };
 
-async function renderFolders() {
-    const folders = await getFolders();
-    folderListEl.innerHTML = "";
+    function sendMessage(msg) {
+        return new Promise((resolve) => {
+            const timeoutId = setTimeout(() => {
+                console.warn("Message sent but no response within 5 seconds.");
+                resolve({ success: false, error: "Timeout or service worker unavailable." });
+            }, 5000);
 
-    Object.keys(folders).forEach(folderName => {
-        const folderDiv = document.createElement("div");
-        folderDiv.className = "folder";
+            chrome.runtime.sendMessage(msg, (response) => {
+                clearTimeout(timeoutId);
 
-        const title = document.createElement("div");
-        title.className = "folder-title";
-        title.textContent = folderName;
-        title.onclick = () => toggleFolder(folderName);
+                if (chrome.runtime.lastError) {
+                    resolve({ success: false, error: chrome.runtime.lastError.message });
+                } else {
+                    resolve(response);
+                }
+            });
+        });
+    }
 
-        const delBtn = document.createElement("button");
-        delBtn.textContent = "Delete Folder";
-        delBtn.onclick = async (e) => {
-            e.stopPropagation();
-            await deleteFolder(folderName);
-            renderFolders();
-        };
+    function updateActiveStatus() {
+        if (currentActiveSession?.folder && currentActiveSession?.session) {
+            activeSessionStatusEl.innerHTML = `
+                Autosaving to:
+                <span class="font-bold text-indigo-300">
+                    ${currentActiveSession.folder} / ${currentActiveSession.session}
+                </span>`;
+        } else {
+            activeSessionStatusEl.textContent = "No active session being monitored.";
+        }
+    }
 
-        folderDiv.appendChild(title);
-        folderDiv.appendChild(delBtn);
+    async function renderFolders() {
+        mainView.style.display = "block";
+        sessionDetailView.style.display = "none";
 
-        const sessionsWrap = document.createElement("div");
-        sessionsWrap.id = `sessions-${folderName}`;
-        sessionsWrap.style.display = "none";
+        let folders = {};
 
-        const sessions = folders[folderName].sessions;
+        try {
+            const data = await chrome.storage.local.get(["folders", "activeSession"]);
+            folders = data.folders || {};
+            currentActiveSession = data.activeSession || null;
+        } catch (err) {
+            folderListEl.innerHTML = `<p class="error">Error loading sessions.</p>`;
+            return;
+        }
 
-        Object.keys(sessions).forEach(sessionName => {
-            const row = document.createElement("div");
-            row.className = "session-item";
+        folderListEl.innerHTML = "";
+        updateActiveStatus();
 
-            const label = document.createElement("span");
-            label.textContent = sessionName;
+        Object.keys(folders).forEach(folderName => {
+            const folderDiv = document.createElement("div");
+            folderDiv.className = "folder";
 
-            const restoreBtn = document.createElement("button");
-            restoreBtn.textContent = "Open";
-            restoreBtn.onclick = () => restoreSession(folderName, sessionName);
+            const header = document.createElement("div");
+            header.className = "folder-header";
+            header.innerHTML = `
+                <span>${folderName}</span>
+                <button class="delete-folder">✖</button>
+            `;
 
-            const delSessionBtn = document.createElement("button");
-            delSessionBtn.textContent = "X";
-            delSessionBtn.onclick = async () => {
-                await deleteSession(folderName, sessionName);
-                renderFolders();
+            header.onclick = (e) => {
+                if (!e.target.closest("button")) {
+                    toggleFolder(folderName);
+                }
             };
 
-            const actions = document.createElement("div");
-            actions.appendChild(restoreBtn);
-            actions.appendChild(delSessionBtn);
+            header.querySelector(".delete-folder").onclick = async (e) => {
+                e.stopPropagation();
+                if (confirm(`Delete folder "${folderName}" and all its sessions?`)) {
+                    await sendMessage({ type: "DELETE_FOLDER", folderName });
+                    renderFolders();
+                }
+            };
 
-            row.appendChild(label);
-            row.appendChild(actions);
-            sessionsWrap.appendChild(row);
+            const sessionsWrap = document.createElement("div");
+            sessionsWrap.id = `sessions-${folderName}`;
+            sessionsWrap.className = "session-group";
+            sessionsWrap.style.display = "none";
+
+            const sessions = folders[folderName].sessions;
+
+            Object.keys(sessions).forEach(sessionName => {
+                const row = document.createElement("div");
+                row.className = "session-row";
+                row.textContent = sessionName;
+                row.onclick = () => showSessionDetail(folderName, sessionName);
+
+                sessionsWrap.appendChild(row);
+            });
+
+            folderDiv.appendChild(header);
+            folderDiv.appendChild(sessionsWrap);
+            folderListEl.appendChild(folderDiv);
         });
+    }
 
-        folderDiv.appendChild(sessionsWrap);
-        folderListEl.appendChild(folderDiv);
-    });
-}
+    async function showSessionDetail(folderName, sessionName) {
+        mainView.style.display = "none";
+        sessionDetailView.style.display = "block";
 
-function toggleFolder(folderName) {
-    const el = document.getElementById(`sessions-${folderName}`);
-    el.style.display = el.style.display === "none" ? "block" : "none";
-}
+        activeSessionContext = { folder: folderName, session: sessionName };
+        sessionDetailTitleEl.textContent = `${folderName} / ${sessionName}`;
 
-function restoreSession(folderName, sessionName) {
-    chrome.runtime.sendMessage({
-        type: "RESTORE_SESSION",
-        folderName,
-        sessionName
-    });
-}
+        const data = await chrome.storage.local.get("folders");
+        const sessionTabs = data.folders?.[folderName]?.sessions?.[sessionName] || [];
 
-saveSessionBtn.onclick = async () => {
-    const folderName = prompt("Folder name:", "Default");
-    if (!folderName) return;
+        sessionTabsListEl.innerHTML = "";
 
-    const sessionName = prompt("Session name:", new Date().toLocaleString());
-    if (!sessionName) return;
+        if (sessionTabs.length === 0) {
+            sessionTabsListEl.innerHTML = `<p>No saved tabs.</p>`;
+            return;
+        }
 
-    chrome.runtime.sendMessage({
-        type: "SAVE_SESSION",
-        folderName,
-        sessionName
-    }, async () => {
-        await createFolder(folderName);
+        sessionTabs.forEach(tab => {
+            const item = document.createElement("li");
+            item.className = "tab-item";
+            item.textContent = tab.title || tab.url;
+            item.onclick = () => chrome.tabs.create({ url: tab.url });
+
+            sessionTabsListEl.appendChild(item);
+        });
+    }
+
+    function toggleFolder(folderName) {
+        const el = document.getElementById(`sessions-${folderName}`);
+        el.style.display = (el.style.display === "none" ? "block" : "none");
+    }
+
+    function restoreSession(folderName, sessionName) {
+        sendMessage({ type: "RESTORE_SESSION", folderName, sessionName });
+        window.close();
+    }
+
+    backToFoldersBtn.onclick = () => renderFolders();
+
+    restoreDetailBtn.onclick = () => {
+        const { folder, session } = activeSessionContext;
+        if (folder && session) {
+            if (confirm(`Restore "${session}" now?`)) {
+                restoreSession(folder, session);
+            }
+        }
+    };
+
+    newFolderBtn.onclick = async () => {
+        const name = prompt("Folder name:");
+        if (!name) return;
+
+        await sendMessage({ type: "CREATE_FOLDER", folderName: name });
         renderFolders();
-        alert("Session saved!");
-    });
-};
+    };
 
-newFolderBtn.onclick = async () => {
-    const folderName = prompt("New folder name:");
-    if (!folderName) return;
+    if (saveSessionBtn) {
+        saveSessionBtn.onclick = async () => {
+            const folderName = prompt("Folder name:");
+            if (!folderName) return;
 
-    await createFolder(folderName);
+            const sessionName = prompt("Session name:");
+            if (!sessionName) return;
+
+            await sendMessage({
+                type: "SAVE_SESSION",
+                folderName,
+                sessionName,
+                setActive: true
+            });
+
+            renderFolders();
+        };
+    }
+
     renderFolders();
-};
-
-renderFolders();
+});
