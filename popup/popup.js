@@ -1,4 +1,3 @@
-document.addEventListener("DOMContentLoaded", () => {
     const mainView = document.getElementById("mainView");
     const sessionDetailView = document.getElementById("sessionDetailView");
     const folderListEl = document.getElementById("folderList");
@@ -184,5 +183,4 @@ document.addEventListener("DOMContentLoaded", () => {
         };
     }
 
-    renderFolders();
-});
+renderFolders();

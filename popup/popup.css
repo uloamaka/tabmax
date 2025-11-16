@@ -27,3 +27,20 @@ body {
 .folder-list div {
     margin-bottom: 6px;
 }
+
+html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    width: 100%;
+    background: #111827; 
+    color: #e5e7eb;
+    overflow: auto;
+    font-family: system-ui, sans-serif;
+}
+
+.fullpage {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}

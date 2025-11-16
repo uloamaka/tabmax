@@ -201,3 +201,20 @@ chrome.tabs.onRemoved.addListener((tabId) => {
         console.error("Autosave onRemoved failed:", e);
     }
 });
+
+chrome.action.onClicked.addListener(async () => {
+     const url = chrome.runtime.getURL("dist/index.html");
+
+    const existing = await chrome.tabs.query({ url });
+
+    if (existing.length > 0) {
+        chrome.tabs.update(existing[0].id, { active: true });
+        return;
+    }
+
+    const tab = await chrome.tabs.create({ url });
+
+    chrome.tabs.update(tab.id, { pinned: true });
+
+    chrome.tabs.move(tab.id, { index: 0 });
+});

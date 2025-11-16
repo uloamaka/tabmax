@@ -5,26 +5,26 @@
     <title>tabmax</title>
     <link rel="stylesheet" href="popup.css">
 </head>
-
 <body>
-<div id="mainView" class="view">
-    <div id="activeSessionStatus" class="status"></div>
 
-    <button id="newFolderBtn" class="btn">+ New Folder</button>
+<div id="mainView">
+    <div id="activeSessionStatus"></div>
 
-    <div id="folderList" class="folder-list"></div>
+    <button id="saveSessionBtn">Save Current Session</button>
+    <button id="newFolderBtn">+ New Folder</button>
+
+    <div id="folderList"></div>
 </div>
 
-<div id="sessionDetailView" class="view" style="display:none;">
-    <button id="backToFoldersBtn" class="btn back">Back</button>
+<div id="sessionDetailView" style="display:none;">
+    <button id="backToFoldersBtn">⬅ Back</button>
 
     <h2 id="sessionDetailTitle"></h2>
-
-    <button id="restoreDetailBtn" class="btn">Restore This Session</button>
+    <button id="restoreDetailBtn">Restore This Session</button>
 
     <ul id="sessionTabsList"></ul>
 </div>
 
-<script type="module" src="popup.js"></script>
+<script src="popup.js"></script>
 </body>
 </html>
