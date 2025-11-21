@@ -8,7 +8,6 @@ import {
     X,
 } from 'lucide-react';
 
-// Helper to send messages to background and get a promise
 function sendBg(msg) {
     return new Promise((resolve) => {
         try {
@@ -28,7 +27,6 @@ function sendBg(msg) {
     });
 }
 
-// Storage helper
 const StorageClient = {
     async getAll() {
         const data = await chrome.storage.local.get(['folders']);
@@ -62,31 +60,26 @@ export default function App() {
     const [creatingFolder, setCreatingFolder] = useState(false);
     const [newFolderName, setNewFolderName] = useState('');
 
-    // Ensure `default` folder exists (run on first load)
     const ensureDefaultFolder = useCallback(async (folders) => {
         if (!folders || typeof folders !== 'object') return;
         if (!Object.prototype.hasOwnProperty.call(folders, 'default')) {
-            // request background to create the folder (background should call createFolder)
-            await sendBg({ type: 'SAVE_FOLDER', folderName: 'default' });
-            // storage -> onChanged will fire and update the UI; but to be safe, fetch again
+            await sendBg({ type: 'CREATE_FOLDER', folderName: 'default' });
             const fresh = await StorageClient.getAll();
             setFoldersObj(fresh);
             setAllFolderNames(Object.keys(fresh));
         }
     }, []);
 
-    // Initial load: folders + lastFolder
     const loadInitial = useCallback(async () => {
         const folders = await StorageClient.getAll();
         await ensureDefaultFolder(folders);
-        const fresh = await StorageClient.getAll(); // get again after ensuring default
+        const fresh = await StorageClient.getAll(); 
         setFoldersObj(fresh);
         const names = Object.keys(fresh);
         setAllFolderNames(names);
 
         // determine last folder
         const last = await StorageClient.getLastFolder();
-        // prefer last if exists and is present in storage; otherwise use 'default'
         if (last && names.includes(last)) {
             setSelectedFolder(last);
         } else {
@@ -94,7 +87,6 @@ export default function App() {
             await StorageClient.setLastFolder('default');
         }
 
-        // Optionally load last active session (if you want to auto-select it)
         const data = await chrome.storage.local.get(['activeSession']);
         const active = data.activeSession;
         if (
@@ -114,7 +106,6 @@ export default function App() {
         const unsub = StorageClient.subscribe((newFolders) => {
             setFoldersObj(newFolders || {});
             setAllFolderNames(Object.keys(newFolders || {}));
-            // If the selectedFolder was deleted elsewhere, fall back to 'default'
             if (
                 !Object.prototype.hasOwnProperty.call(
                     newFolders || {},
@@ -131,7 +122,6 @@ export default function App() {
             }
         });
         return unsub;
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     // When user selects folder from dropdown
@@ -149,13 +139,11 @@ export default function App() {
         // do not allow 'default' to be created by user if exists (but allow other names)
         if (name === '') return;
 
-        // send to background to create folder (background handler for SAVE_FOLDER should run createFolder)
-        const res = await sendBg({ type: 'SAVE_FOLDER', folderName: name });
-        // if success, switch to new folder
+        const res = await sendBg({ type: 'CREATE_FOLDER', folderName: name });
+    
         if (res && res.success !== false) {
             setCreatingFolder(false);
             setNewFolderName('');
-            // After creation storage.onChanged will update foldersObj; setSelectedFolder to the created name
             setSelectedFolder(name);
             await StorageClient.setLastFolder(name);
             setSelectedSession(null);
@@ -191,7 +179,6 @@ export default function App() {
         });
     };
 
-    // Delete session wrapper
     const deleteSession = async (sessionName) => {
         if (!confirm(`Delete session "${sessionName}"?`)) return;
         await sendBg({
@@ -199,11 +186,9 @@ export default function App() {
             folderName: selectedFolder,
             sessionName,
         });
-        // storage.onChanged will update UI; clear selection if it was the deleted one
         if (selectedSession === sessionName) setSelectedSession(null);
     };
 
-    // Restore session wrapper
     const restoreSession = async (sessionName) => {
         if (
             !confirm(
@@ -216,7 +201,6 @@ export default function App() {
             folderName: selectedFolder,
             sessionName,
         });
-        // set as active session as well
         await sendBg({
             type: 'SET_ACTIVE_SESSION',
             folderName: selectedFolder,
@@ -224,7 +208,6 @@ export default function App() {
         });
     };
 
-    // Delete folder wrapper (cannot delete default)
     const deleteFolder = async (folderName) => {
         if (folderName === 'default') {
             alert('The default folder cannot be deleted.');
@@ -237,11 +220,8 @@ export default function App() {
         )
             return;
         await sendBg({ type: 'DELETE_FOLDER', folderName });
-        // storage onChanged will update; ensure fallback
         setSelectedSession(null);
     };
-
-    // derive sessions for selected folder
     const sessionsForSelected = Object.keys(
         foldersObj[selectedFolder]?.sessions || {}
     );

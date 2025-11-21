@@ -101,7 +101,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     let handled = false; 
     
     (async () => {
-        if (msg.type === "SAVE_FOLDER") {
+        if (msg.type === "CREATE_FOLDER") {
             await createFolder(msg.folderName);
             sendResponse({ success: true });
             handled = true;
