@@ -101,8 +101,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     let handled = false; 
     
     (async () => {
-        if (msg.type === "SAVE_SESSION") {
+        if (msg.type === "SAVE_FOLDER") {
             await createFolder(msg.folderName);
+            sendResponse({ success: true });
+            handled = true;
+        }
+
+        if (msg.type === "SAVE_SESSION") {
+            existingFolders = getFolders()
+            if (!existingFolders[msg.folderName] && msg.folderName !== "") {
+                await createFolder(msg.folderName);
+            }
             const res = await saveCurrentSession(msg.folderName, msg.sessionName);
             if (msg.setActive) await setActiveSession(msg.folderName, msg.sessionName);
             sendResponse(res);
