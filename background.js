@@ -1,12 +1,14 @@
 import {
     createFolder, saveSession, setActiveSession, getActiveSession,
     getSessionsInFolder, updateTabInActiveSession, removeTabFromActiveSession,
-    deleteFolder,
-    deleteSession
+    deleteFolder, deleteSession, getFolders
 } from "./storage.js";
 
 let isRestoring = false;
 let restoreHasRun = false;
+
+const UI_PATH = "dist/index.html"; 
+const UI_URL = chrome.runtime.getURL(UI_PATH);
 
 function getFavicon(url) {
     try {
@@ -15,6 +17,52 @@ function getFavicon(url) {
     } catch {
         return "";
     }
+}
+
+async function ensureTabMaxInWindow(windowId) {
+    const tabs = await chrome.tabs.query({ windowId });
+    let tabMax = tabs.find(t => {
+        try {
+            return t.url === UI_URL;
+        } catch {
+            return false;
+        }
+    });
+
+    if (tabMax) {
+        try {
+            if (!tabMax.pinned) {
+                await chrome.tabs.update(tabMax.id, { pinned: true });
+            }
+            await chrome.tabs.move(tabMax.id, { index: 0 });
+        } catch (e) {
+            console.warn("Failed to pin/move TabMax tab:", e);
+        }
+        return tabMax.id;
+    }
+
+    const created = await chrome.tabs.create({ url: UI_URL, active: false });
+    try {
+        await chrome.tabs.update(created.id, { pinned: true });
+        await chrome.tabs.move(created.id, { index: 0 });
+    } catch (e) {
+        console.warn("Failed to pin/move newly created TabMax tab:", e);
+    }
+
+    return created.id;
+}
+
+async function clearNonTabMaxTabs(windowId, exceptTabId) {
+    const tabs = await chrome.tabs.query({ windowId });
+    const toRemove = tabs.filter(t => t.id !== exceptTabId).map(t => t.id);
+    if (toRemove.length > 0) {
+        try {
+            await chrome.tabs.remove(toRemove);
+        } catch (e) {
+            console.error("Failed to remove tabs:", e);
+        }
+    }
+    return toRemove;
 }
 
 async function saveCurrentSession(folderName, sessionName) {
@@ -44,32 +92,36 @@ async function restoreSession(folderName, sessionName) {
     try {
         const sessions = await getSessionsInFolder(folderName);
         const tabs = sessions[sessionName] || [];
-        if (!tabs.length) return;
 
         const win = await chrome.windows.getCurrent();
-        const existingTabs = await chrome.tabs.query({ windowId: win.id });
-        
-        const firstTabId = existingTabs[0].id;
-        
-        const toRemove = existingTabs.slice(1).map(t => t.id).filter(id => id !== firstTabId);
-        
-        if (toRemove.length > 0) {
-            await chrome.tabs.remove(toRemove);
+        const tabMaxId = await ensureTabMaxInWindow(win.id);
+
+        // Remove all non-TabMax tabs
+        await clearNonTabMaxTabs(win.id, tabMaxId);
+
+        if (!tabs.length) {
+            await chrome.tabs.create({ url: "about:blank", windowId: win.id, active: true });
+            await setActiveSession(folderName, sessionName);
+            return;
         }
 
-        await chrome.tabs.update(firstTabId, { url: tabs[0].url, active: true });
-        
-        for (let i = 1; i < tabs.length; i++) {
-            if (!tabs[i].url || tabs[i].url.startsWith("chrome://") || tabs[i].url.startsWith("chrome-extension://")) continue; 
-            await chrome.tabs.create({ url: tabs[i].url, windowId: win.id, active: false });
+        for (let i = 0; i < tabs.length; i++) {
+            const t = tabs[i];
+            if (!t?.url) continue;
+            const url = t.url;
+            if (url.startsWith("chrome://") || url.startsWith("chrome-extension://")) {
+                continue;
+            }
+            await chrome.tabs.create({ url, windowId: win.id, active: false });
         }
 
-        const { lastActiveTabIndex } = await chrome.storage.local.get("lastActiveTabIndex");
-        const indexToActivate = lastActiveTabIndex ?? 0;
+        const data = await chrome.storage.local.get("lastActiveTabIndex");
+        const lastActiveTabIndex = data.lastActiveTabIndex ?? 0;
 
         const newList = await chrome.tabs.query({ windowId: win.id });
+        const indexToActivate = Math.min(Math.max(0, lastActiveTabIndex + 1), newList.length - 1); // +1 because tabMax at 0
         if (newList[indexToActivate]) {
-            chrome.tabs.update(newList[indexToActivate].id, { active: true });
+            await chrome.tabs.update(newList[indexToActivate].id, { active: true });
         }
 
         await setActiveSession(folderName, sessionName);
@@ -78,6 +130,38 @@ async function restoreSession(folderName, sessionName) {
         console.error("Restore failed:", err);
     } finally {
         setTimeout(() => { isRestoring = false; }, 500);
+    }
+}
+
+async function createAndSwitchToSession(folderName, sessionName) {
+    isRestoring = true;
+    try {
+        const existing = await getFolders();
+        if (!existing[folderName]) {
+            await createFolder(folderName);
+        }
+
+        const all = await chrome.storage.local.get(['folders']);
+        const f = all.folders || {};
+        if (!f[folderName]) f[folderName] = { sessions: {} };
+        f[folderName].sessions[sessionName] = [];
+        await chrome.storage.local.set({ folders: f });
+
+        const win = await chrome.windows.getCurrent();
+        const tabMaxId = await ensureTabMaxInWindow(win.id);
+
+        await clearNonTabMaxTabs(win.id, tabMaxId);
+
+        const newTab = await chrome.tabs.create({ url: "chrome://newtab", windowId: win.id, active: true });
+
+        await setActiveSession(folderName, sessionName);
+
+        return { success: true, tabId: newTab.id };
+    } catch (err) {
+        console.error("createAndSwitchToSession failed:", err);
+        return { success: false, error: String(err) };
+    } finally {
+        setTimeout(() => { isRestoring = false; }, 400);
     }
 }
 
@@ -98,17 +182,17 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    let handled = false; 
-    
+    let handled = false;
+
     (async () => {
-        if (msg.type === "CREATE_FOLDER") {
+        if (msg.type === "CREATE_FOLDER" || msg.type === "SAVE_FOLDER") {
             await createFolder(msg.folderName);
             sendResponse({ success: true });
             handled = true;
         }
 
         if (msg.type === "SAVE_SESSION") {
-            existingFolders = getFolders()
+            const existingFolders = await getFolders();
             if (!existingFolders[msg.folderName] && msg.folderName !== "") {
                 await createFolder(msg.folderName);
             }
@@ -117,19 +201,33 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             sendResponse(res);
             handled = true;
         }
-    
+
         if (msg.type === "RESTORE_SESSION") {
             await setActiveSession(msg.folderName, msg.sessionName);
             await restoreSession(msg.folderName, msg.sessionName);
             sendResponse({ success: true });
             handled = true;
         }
-    
+
         if (msg.type === "SET_ACTIVE_SESSION") {
             await setActiveSession(msg.folderName, msg.sessionName);
             sendResponse({ success: true });
             handled = true;
         }
+
+        if (msg.type === "CREATE_AND_SWITCH_SESSION") {
+            const folderName = msg.folderName || 'default';
+            const sessionName = msg.sessionName;
+            if (!sessionName) {
+                sendResponse({ success: false, error: "sessionName required" });
+                handled = true;
+            } else {
+                const r = await createAndSwitchToSession(folderName, sessionName);
+                sendResponse(r);
+                handled = true;
+            }
+        }
+
         if (msg.type === "DELETE_FOLDER") {
             await deleteFolder(msg.folderName);
             sendResponse({ success: true });
@@ -142,19 +240,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             handled = true;
         }
 
-        
         if (handled) return;
     })();
 
-    return true; 
+    return true;
 });
 
 chrome.tabs.onCreated.addListener(tab => {
-    if (isRestoring) return; 
+    if (isRestoring) return;
     if (tab.url && (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://'))) return;
 
-    try { 
-        updateTabInActiveSession(tab); 
+    try {
+        updateTabInActiveSession(tab);
     } catch (e) {
         console.error("Autosave onCreated failed:", e);
     }
@@ -164,9 +261,9 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
     if (isRestoring) return;
 
     chrome.tabs.get(tabId, (tab) => {
-        try { 
+        try {
             if (tab && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
-                updateTabInActiveSession(tab); 
+                updateTabInActiveSession(tab);
             }
         } catch (e) {
             console.error("Autosave onActivated update failed:", e);
@@ -192,9 +289,9 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (isRestoring) return;
     if (changeInfo.status === "complete" || changeInfo.title || changeInfo.favIconUrl) {
-        try { 
+        try {
             if (!tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
-                updateTabInActiveSession(tab); 
+                updateTabInActiveSession(tab);
             }
         } catch (e) {
             console.error("Autosave onUpdated failed:", e);
@@ -204,15 +301,15 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
     if (isRestoring) return;
-    try { 
-        removeTabFromActiveSession(tabId); 
+    try {
+        removeTabFromActiveSession(tabId);
     } catch (e) {
         console.error("Autosave onRemoved failed:", e);
     }
 });
 
 chrome.action.onClicked.addListener(async () => {
-     const url = chrome.runtime.getURL("dist/index.html");
+    const url = UI_URL;
 
     const existing = await chrome.tabs.query({ url });
 

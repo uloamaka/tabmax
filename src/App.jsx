@@ -78,7 +78,6 @@ export default function App() {
         const names = Object.keys(fresh);
         setAllFolderNames(names);
 
-        // determine last folder
         const last = await StorageClient.getLastFolder();
         if (last && names.includes(last)) {
             setSelectedFolder(last);
@@ -124,19 +123,16 @@ export default function App() {
         return unsub;
     }, []);
 
-    // When user selects folder from dropdown
     const handleSelectFolder = async (folderName) => {
         setDropdownOpen(false);
         setSelectedFolder(folderName);
-        setSelectedSession(null); // clear session selection when switching folder
+        setSelectedSession(null); 
         await StorageClient.setLastFolder(folderName);
     };
 
-    // Create folder inline
     const handleCreateFolder = async () => {
         const name = newFolderName && newFolderName.trim();
         if (!name) return;
-        // do not allow 'default' to be created by user if exists (but allow other names)
         if (name === '') return;
 
         const res = await sendBg({ type: 'CREATE_FOLDER', folderName: name });
@@ -161,11 +157,10 @@ export default function App() {
 
         const folderKey = selectedFolder || 'default';
 
-        // Update storage directly (creating folder if necessary)
         const data = await chrome.storage.local.get(['folders']);
         const f = data.folders || {};
         if (!f[folderKey]) f[folderKey] = { sessions: {} };
-        f[folderKey].sessions[name] = []; // empty session (will be filled when user saves current tabs or autosave runs)
+        f[folderKey].sessions[name] = []; 
         await chrome.storage.local.set({ folders: f });
 
         setNewSessionName('');
@@ -173,7 +168,7 @@ export default function App() {
         setSelectedSession(name);
         // set active session for background autosave
         await sendBg({
-            type: 'SET_ACTIVE_SESSION',
+            type: 'CREATE_AND_SWITCH_SESSION',
             folderName: folderKey,
             sessionName: name,
         });
@@ -519,7 +514,7 @@ export default function App() {
                                 Session
                             </span>
                         </button>
-                        <button
+                        {/* <button
                             onClick={() => {
                                 // Save current tabs into a session in the selected folder via background SAVE_SESSION
                                 const sessionPrompt = prompt(
@@ -542,7 +537,7 @@ export default function App() {
                             }}
                         >
                             Save current tabs
-                        </button>
+                        </button> */}
                     </div>
                 </div>
 
