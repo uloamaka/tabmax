@@ -217,6 +217,7 @@ export default function App() {
         await sendBg({ type: 'DELETE_FOLDER', folderName });
         setSelectedSession(null);
     };
+
     const sessionsForSelected = Object.keys(
         foldersObj[selectedFolder]?.sessions || {}
     );
@@ -334,12 +335,16 @@ export default function App() {
                                                         key={fn}
                                                         style={{
                                                             display: 'flex',
-                                                            alignItems:
-                                                                'center',
+                                                            alignItems: 'center',
                                                             justifyContent:
                                                                 'space-between',
                                                             padding: '8px',
                                                             borderRadius: 6,
+                                                            background:
+                                                                selectedFolder === fn
+                                                                    ? '#f3f4f6'
+                                                                    : 'transparent',
+                                                            transition: 'background 0.2s',
                                                         }}
                                                     >
                                                         <div
@@ -351,10 +356,44 @@ export default function App() {
                                                             style={{
                                                                 cursor: 'pointer',
                                                                 paddingRight: 8,
+                                                                flexGrow: 1, 
+                                                                fontWeight:
+                                                                    selectedFolder === fn
+                                                                        ? '600'
+                                                                        : '400',
                                                             }}
                                                         >
                                                             {fn}
                                                         </div>
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation(); 
+                                                                deleteFolder(fn);
+                                                            }}
+                                                            style={{
+                                                                display:
+                                                                    fn === 'default'
+                                                                        ? 'none'
+                                                                        : 'flex',
+                                                                alignItems: 'center',
+                                                                justifyContent: 'center',
+                                                                width: 20,
+                                                                height: 20,
+                                                                padding: 0,
+                                                                border: 'none',
+                                                                borderRadius: 4,
+                                                                background: 'transparent',
+                                                                cursor: 'pointer',
+                                                                color: '#6b7280',
+                                                                marginLeft: 8,
+                                                                ':hover': {
+                                                                    color: '#ef4444', 
+                                                                    background: '#fecaca',
+                                                                },
+                                                            }}
+                                                        >
+                                                            <X style={{ width: 14, height: 14 }} /> 
+                                                        </button>
                                                     </div>
                                                 ))
                                             )}
