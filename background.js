@@ -100,6 +100,15 @@ async function restoreSession(folderName, sessionName) {
     isRestoring = true;
 
     try {
+        const active = await getActiveSession();
+        if (
+            active &&
+            active.folder === folderName &&
+            active.session === sessionName
+        ) {
+            return; 
+        }
+        
         const sessions = await getSessionsInFolder(folderName);
         const tabs = sessions[sessionName] || [];
 
