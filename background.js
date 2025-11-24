@@ -69,7 +69,17 @@ async function saveCurrentSession(folderName, sessionName) {
     try {
         const tabs = await chrome.tabs.query({ currentWindow: true });
 
-        const formatted = tabs.map(tab => ({
+        const filteredTabs = tabs.filter(tab => {
+            const url = tab.url || "";
+            return (
+                url.startsWith("http://") ||
+                url.startsWith("https://") ||
+                url.startsWith("file://") ||   
+                url.startsWith("data:")     
+            );
+        });
+
+        const formatted = filteredTabs.map(tab => ({
             id: tab.id,
             url: tab.url || "",
             title: tab.title || "",
@@ -96,7 +106,6 @@ async function restoreSession(folderName, sessionName) {
         const win = await chrome.windows.getCurrent();
         const tabMaxId = await ensureTabMaxInWindow(win.id);
 
-        // Remove all non-TabMax tabs
         await clearNonTabMaxTabs(win.id, tabMaxId);
 
         if (!tabs.length) {
