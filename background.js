@@ -100,7 +100,7 @@ async function restoreSession(folderName, sessionName) {
         await clearNonTabMaxTabs(win.id, tabMaxId);
 
         if (!tabs.length) {
-            await chrome.tabs.create({ url: "about:blank", windowId: win.id, active: true });
+            await chrome.tabs.create({ url: "chrome://newtab", windowId: win.id, active: true });
             await setActiveSession(folderName, sessionName);
             return;
         }

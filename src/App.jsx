@@ -514,30 +514,6 @@ export default function App() {
                                 Session
                             </span>
                         </button>
-                        {/* <button
-                            onClick={() => {
-                                // Save current tabs into a session in the selected folder via background SAVE_SESSION
-                                const sessionPrompt = prompt(
-                                    'Name for session to save current window tabs:'
-                                );
-                                if (!sessionPrompt) return;
-                                // If the selectedFolder is 'default' ensure background can handle it — background SAVE_SESSION will create folder if needed
-                                sendBg({
-                                    type: 'SAVE_SESSION',
-                                    folderName: selectedFolder || 'default',
-                                    sessionName: sessionPrompt,
-                                    setActive: true,
-                                });
-                            }}
-                            style={{
-                                padding: 8,
-                                borderRadius: 6,
-                                border: '1px solid #ddd',
-                                background: '#fff',
-                            }}
-                        >
-                            Save current tabs
-                        </button> */}
                     </div>
                 </div>
 
