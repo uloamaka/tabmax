@@ -155,6 +155,15 @@ export default function App() {
         const name = newSessionName && newSessionName.trim();
         if (!name) return alert('Enter a session name');
 
+        // check if session with same name exists in selected folder
+        const existingSessions =
+            foldersObj[selectedFolder]?.sessions || {};
+        if (existingSessions[name]) {
+            return alert(
+                `A session named "${name}" already exists in folder "${selectedFolder}". Choose a different name.`
+            );
+        }
+
         const folderKey = selectedFolder || 'default';
 
         const data = await chrome.storage.local.get(['folders']);
