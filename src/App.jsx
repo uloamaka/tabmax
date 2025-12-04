@@ -184,13 +184,23 @@ export default function App() {
 
     const deleteSession = async (sessionName) => {
         if (!confirm(`Delete session "${sessionName}"?`)) return;
-        await sendBg({
-            type: 'DELETE_SESSION',
+
+        const resp = await sendBg({
+            type: "DELETE_SESSION",
             folderName: selectedFolder,
             sessionName,
         });
-        if (selectedSession === sessionName) setSelectedSession(null);
+
+        if (resp?.error === "ACTIVE_SESSION_DELETE_BLOCKED") {
+            alert("Cannot delete the active session. Please switch sessions first.");
+            return;
+        }
+
+        if (selectedSession === sessionName) {
+            setSelectedSession(null);
+        }
     };
+
 
     const restoreSession = async (sessionName) => {
         if (
@@ -208,19 +218,24 @@ export default function App() {
     };
 
     const deleteFolder = async (folderName) => {
-        if (folderName === 'default') {
-            alert('The default folder cannot be deleted.');
+        if (folderName === "default") {
+            alert("The default folder cannot be deleted.");
             return;
         }
-        if (
-            !confirm(
-                `Delete folder "${folderName}" and all contained sessions?`
-            )
-        )
+
+        if (!confirm(`Delete folder "${folderName}" and all contained sessions?`))
             return;
-        await sendBg({ type: 'DELETE_FOLDER', folderName });
+
+        const resp = await sendBg({ type: "DELETE_FOLDER", folderName });
+
+        if (resp?.error === "ACTIVE_FOLDER_DELETE_BLOCKED") {
+            alert("Cannot delete the folder containing the active session.");
+            return;
+        }
+
         setSelectedSession(null);
     };
+
 
     const sessionsForSelected = Object.keys(
         foldersObj[selectedFolder]?.sessions || {}

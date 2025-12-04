@@ -248,16 +248,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
 
         if (msg.type === "DELETE_FOLDER") {
-            await deleteFolder(msg.folderName);
-            sendResponse({ success: true });
+            const result = await deleteFolder(msg.folderName);
+            sendResponse(result);
             handled = true;
         }
 
         if (msg.type === "DELETE_SESSION") {
-            await deleteSession(msg.folderName, msg.sessionName);
-            sendResponse({ success: true });
+            const result = await deleteSession(msg.folderName, msg.sessionName);
+            sendResponse(result); 
             handled = true;
         }
+
 
         if (handled) return;
     })();

@@ -51,22 +51,40 @@ async function saveSession(folderName, sessionName, tabs) {
 }
 
 async function deleteSession(folderName, sessionName) {
+    const active = await getActiveSession();
+
+    if (active && active.folder === folderName && active.session === sessionName) {
+        return { error: "ACTIVE_SESSION_DELETE_BLOCKED" };
+    }
+
     const folders = await getAllFolders();
 
     if (folders[folderName]?.sessions?.[sessionName]) {
         delete folders[folderName].sessions[sessionName];
         await saveFolders(folders);
     }
+
+    return { success: true };
 }
 
+
 async function deleteFolder(folderName) {
+    const active = await getActiveSession();
+
+    if (active && active.folder === folderName) {
+        return { error: "ACTIVE_FOLDER_DELETE_BLOCKED" };
+    }
+
     const folders = await getAllFolders();
 
     if (folders[folderName]) {
         delete folders[folderName];
         await saveFolders(folders);
     }
+
+    return { success: true };
 }
+
 
 async function getSessionsInFolder(folderName) {
     const folders = await getAllFolders();
