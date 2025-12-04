@@ -7,7 +7,7 @@ import {
     ChevronDown,
     X,
 } from 'lucide-react';
-
+ 
 function sendBg(msg) {
     return new Promise((resolve) => {
         try {
@@ -155,7 +155,6 @@ export default function App() {
         const name = newSessionName && newSessionName.trim();
         if (!name) return alert('Enter a session name');
 
-        // check if session with same name exists in selected folder
         const existingSessions =
             foldersObj[selectedFolder]?.sessions || {};
         if (existingSessions[name]) {
@@ -198,17 +197,13 @@ export default function App() {
             !confirm(
                 `Restore session "${sessionName}"? This will replace tabs in the current window.`
             )
-        )
-            return;
+        ) return;
+
         await sendBg({
             type: 'RESTORE_SESSION',
             folderName: selectedFolder,
             sessionName,
-        });
-        await sendBg({
-            type: 'SET_ACTIVE_SESSION',
-            folderName: selectedFolder,
-            sessionName,
+            force: true, 
         });
     };
 
@@ -589,15 +584,9 @@ export default function App() {
                                 }}
                             >
                                 <div
-                                    onClick={async () => {
-                                        setSelectedSession(sessionName);
-                                        // set as active so autosave works
-                                        await sendBg({
-                                            type: 'SET_ACTIVE_SESSION',
-                                            folderName: selectedFolder,
-                                            sessionName,
-                                        });
-                                    }}
+                                    onClick={() =>
+                                        setSelectedSession(sessionName)
+                                    }
                                     style={{
                                         cursor: 'pointer',
                                         padding: '8px 10px',

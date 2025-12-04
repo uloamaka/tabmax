@@ -96,16 +96,18 @@ async function saveCurrentSession(folderName, sessionName) {
     }
 }
 
-async function restoreSession(folderName, sessionName) {
+async function restoreSession(folderName, sessionName, { force = false } = {}) {
     isRestoring = true;
 
     try {
         const active = await getActiveSession();
         if (
+            !force &&
             active &&
             active.folder === folderName &&
             active.session === sessionName
         ) {
+            console.log("Already active — skipping restore.");
             return; 
         }
         
@@ -221,7 +223,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
 
         if (msg.type === "RESTORE_SESSION") {
-            await setActiveSession(msg.folderName, msg.sessionName);
             await restoreSession(msg.folderName, msg.sessionName);
             sendResponse({ success: true });
             handled = true;
@@ -316,6 +317,32 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
         }
     }
 });
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+    try {
+        if (isRestoring) return;
+
+        if (!changeInfo.status && !changeInfo.title && !changeInfo.favIconUrl) {
+            return;
+        }
+
+        if (tab.url.startsWith("chrome://") || tab.url.startsWith("chrome-extension://")) {
+            return;
+        }
+
+        const active = await getActiveSession();
+        if (!active) return;     
+
+        const win = await chrome.windows.getCurrent();
+        if (tab.windowId !== win.id) return;
+
+        await updateTabInActiveSession(tab);
+
+    } catch (e) {
+        console.error("Autosave onUpdated failed:", e);
+    }
+});
+
+
 
 chrome.tabs.onRemoved.addListener((tabId) => {
     if (isRestoring) return;
