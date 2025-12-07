@@ -203,19 +203,16 @@ export default function App() {
 
 
     const restoreSession = async (sessionName) => {
-        if (
-            !confirm(
-                `Restore session "${sessionName}"? This will replace tabs in the current window.`
-            )
-        ) return;
+        if (!confirm(`Restore session "${sessionName}"?`)) return;
 
-        await sendBg({
+        const res = await sendBg({
             type: 'RESTORE_SESSION',
             folderName: selectedFolder,
             sessionName,
-            force: true, 
+            force: true,
         });
     };
+
 
     const deleteFolder = async (folderName) => {
         if (folderName === "default") {

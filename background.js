@@ -19,6 +19,16 @@ function getFavicon(url) {
     }
 }
 
+function isValidURL(url) {
+    if (!url || typeof url !== "string") return false;
+    if (url === "chrome://newtab/") return false;
+    if (url.startsWith("chrome://")) return false;
+    if (url.startsWith("chrome-extension://")) return false;
+    if (url === "about:blank") return false;
+    if (url.trim() === "") return false;
+    return true;
+}
+
 async function ensureTabMaxInWindow(windowId) {
     const tabs = await chrome.tabs.query({ windowId });
     let tabMax = tabs.find(t => {
@@ -97,59 +107,100 @@ async function saveCurrentSession(folderName, sessionName) {
 }
 
 async function restoreSession(folderName, sessionName, { force = false } = {}) {
+    if (isRestoring) {
+        console.warn("Restore already in progress");
+        return;
+    }
     isRestoring = true;
+
+    let cleaned = false;
+    const finish = () => {
+        if (!cleaned) {
+            cleaned = true;
+            isRestoring = false;
+        }
+    };
 
     try {
         const active = await getActiveSession();
+
         if (
             !force &&
             active &&
             active.folder === folderName &&
             active.session === sessionName
         ) {
-            console.log("Already active — skipping restore.");
-            return; 
+            finish();
+            return;
         }
-        
+
         const sessions = await getSessionsInFolder(folderName);
         const tabs = sessions[sessionName] || [];
 
         const win = await chrome.windows.getCurrent();
         const tabMaxId = await ensureTabMaxInWindow(win.id);
-
         await clearNonTabMaxTabs(win.id, tabMaxId);
 
         if (!tabs.length) {
-            await chrome.tabs.create({ url: "chrome://newtab", windowId: win.id, active: true });
+            await chrome.tabs.create({
+                url: "chrome://newtab",
+                windowId: win.id,
+                active: true,
+                index: 1,
+            });
             await setActiveSession(folderName, sessionName);
+            finish();
             return;
         }
 
+        const createdIds = [];
         for (let i = 0; i < tabs.length; i++) {
             const t = tabs[i];
             if (!t?.url) continue;
-            const url = t.url;
-            if (url.startsWith("chrome://") || url.startsWith("chrome-extension://")) {
+            if (t.url.startsWith("chrome://") || t.url.startsWith("chrome-extension://"))
                 continue;
+
+            try {
+                const created = await chrome.tabs.create({
+                    url: t.url,
+                    windowId: win.id,
+                    active: false,
+                    index: i + 1,
+                });
+                createdIds.push(created.id);
+            } catch (e) {
+                console.warn("Failed to create tab:", t.url, e);
             }
-            await chrome.tabs.create({ url, windowId: win.id, active: false });
         }
 
-        const data = await chrome.storage.local.get("lastActiveTabIndex");
-        const lastActiveTabIndex = data.lastActiveTabIndex ?? 0;
-
-        const newList = await chrome.tabs.query({ windowId: win.id });
-        const indexToActivate = Math.min(Math.max(0, lastActiveTabIndex + 1), newList.length - 1); // +1 because tabMax at 0
-        if (newList[indexToActivate]) {
-            await chrome.tabs.update(newList[indexToActivate].id, { active: true });
+        if (createdIds.length === 0) {
+            await chrome.tabs.create({
+                url: "chrome://newtab",
+                windowId: win.id,
+                active: true,
+                index: 1,
+            });
+            await setActiveSession(folderName, sessionName);
+            finish();
+            return;
         }
+
+        const { lastActiveTabIndex = 0 } =
+            await chrome.storage.local.get("lastActiveTabIndex");
+
+        const targetIndex = Math.min(
+            Math.max(0, lastActiveTabIndex),
+            createdIds.length - 1
+        );
+
+        await chrome.tabs.update(createdIds[targetIndex], { active: true });
 
         await setActiveSession(folderName, sessionName);
 
     } catch (err) {
         console.error("Restore failed:", err);
     } finally {
-        setTimeout(() => { isRestoring = false; }, 500);
+        finish();
     }
 }
 
@@ -194,11 +245,20 @@ async function tryRestoreLastSession() {
 
     console.log("Restoring last session:", active.folder, active.session);
 
-    await restoreSession(active.folder, active.session);
+    await restoreSession(active.folder, active.session, { force: true });
 }
 
-chrome.runtime.onStartup.addListener(() => {
-    setTimeout(() => tryRestoreLastSession(), 500);
+chrome.runtime.onStartup.addListener(async () => {
+    const windows = await chrome.windows.getAll();
+    if (windows.length > 0) {
+        tryRestoreLastSession();
+        return;
+    }
+
+    chrome.windows.onCreated.addListener(function handle(win) {
+        chrome.windows.onCreated.removeListener(handle);
+        tryRestoreLastSession();
+    });
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -223,7 +283,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
 
         if (msg.type === "RESTORE_SESSION") {
-            await restoreSession(msg.folderName, msg.sessionName);
+            const { folderName, sessionName } = msg;
+            await restoreSession(folderName, sessionName);
+
             sendResponse({ success: true });
             handled = true;
         }
@@ -266,72 +328,65 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
 });
 
-chrome.tabs.onCreated.addListener(tab => {
-    if (isRestoring) return;
-    if (tab.url && (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://'))) return;
-
+chrome.tabs.onCreated.addListener(async (tab) => {
     try {
-        updateTabInActiveSession(tab);
+        if (isRestoring) return;
+
+        if (!tab.url || !isValidURL(tab.url)) return;
+
+        const win = await chrome.windows.getCurrent();
+        if (tab.windowId !== win.id) return;
+
+        await updateTabInActiveSession(tab);
+
     } catch (e) {
         console.error("Autosave onCreated failed:", e);
     }
 });
 
 chrome.tabs.onActivated.addListener(async ({ tabId }) => {
-    if (isRestoring) return;
-
-    chrome.tabs.get(tabId, (tab) => {
-        try {
-            if (tab && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
-                updateTabInActiveSession(tab);
-            }
-        } catch (e) {
-            console.error("Autosave onActivated update failed:", e);
-        }
-    });
-
     try {
-        const active = await getActiveSession();
-        if (!active) return;
+        if (isRestoring) return;
 
-        const sessions = await getSessionsInFolder(active.folder);
-        const sessionTabs = sessions[active.session] || [];
+        const tab = await chrome.tabs.get(tabId);
+        if (!tab || !isValidURL(tab.url)) return;
+
+        const win = await chrome.windows.getCurrent();
+        if (tab.windowId !== win.id) return;
+
+        await updateTabInActiveSession(tab);
+
+        const activeSession = await getActiveSession();
+        if (!activeSession) return;
+
+        const sessions = await getSessionsInFolder(activeSession.folder);
+        const sessionTabs = sessions[activeSession.session] || [];
+
         const idx = sessionTabs.findIndex(t => t.id === tabId);
-
         if (idx !== -1) {
-            chrome.storage.local.set({ lastActiveTabIndex: idx });
+            await chrome.storage.local.set({ lastActiveTabIndex: idx });
         }
+
     } catch (e) {
-        console.error("Saving active index failed:", e);
+        console.error("onActivated failed:", e);
     }
 });
 
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    if (isRestoring) return;
-    if (changeInfo.status === "complete" || changeInfo.title || changeInfo.favIconUrl) {
-        try {
-            if (!tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
-                updateTabInActiveSession(tab);
-            }
-        } catch (e) {
-            console.error("Autosave onUpdated failed:", e);
-        }
-    }
-});
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     try {
         if (isRestoring) return;
 
-        if (!changeInfo.status && !changeInfo.title && !changeInfo.favIconUrl) {
+        if (!changeInfo.status &&
+            !changeInfo.title &&
+            !changeInfo.favIconUrl &&
+            !changeInfo.url) {
             return;
         }
 
-        if (tab.url.startsWith("chrome://") || tab.url.startsWith("chrome-extension://")) {
-            return;
-        }
+        if (!isValidURL(tab.url)) return;
 
         const active = await getActiveSession();
-        if (!active) return;     
+        if (!active) return;
 
         const win = await chrome.windows.getCurrent();
         if (tab.windowId !== win.id) return;
@@ -342,8 +397,6 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
         console.error("Autosave onUpdated failed:", e);
     }
 });
-
-
 
 chrome.tabs.onRemoved.addListener((tabId) => {
     if (isRestoring) return;
