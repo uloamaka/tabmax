@@ -7,7 +7,7 @@ import {
     ChevronDown,
     X,
 } from 'lucide-react';
-
+ 
 function sendBg(msg) {
     return new Promise((resolve) => {
         try {
@@ -155,6 +155,14 @@ export default function App() {
         const name = newSessionName && newSessionName.trim();
         if (!name) return alert('Enter a session name');
 
+        const existingSessions =
+            foldersObj[selectedFolder]?.sessions || {};
+        if (existingSessions[name]) {
+            return alert(
+                `A session named "${name}" already exists in folder "${selectedFolder}". Choose a different name.`
+            );
+        }
+
         const folderKey = selectedFolder || 'default';
 
         const data = await chrome.storage.local.get(['folders']);
@@ -176,47 +184,55 @@ export default function App() {
 
     const deleteSession = async (sessionName) => {
         if (!confirm(`Delete session "${sessionName}"?`)) return;
-        await sendBg({
-            type: 'DELETE_SESSION',
+
+        const resp = await sendBg({
+            type: "DELETE_SESSION",
             folderName: selectedFolder,
             sessionName,
         });
-        if (selectedSession === sessionName) setSelectedSession(null);
+
+        if (resp?.error === "ACTIVE_SESSION_DELETE_BLOCKED") {
+            alert("Cannot delete the active session. Please switch sessions first.");
+            return;
+        }
+
+        if (selectedSession === sessionName) {
+            setSelectedSession(null);
+        }
     };
 
+
     const restoreSession = async (sessionName) => {
-        if (
-            !confirm(
-                `Restore session "${sessionName}"? This will replace tabs in the current window.`
-            )
-        )
-            return;
-        await sendBg({
+        if (!confirm(`Restore session "${sessionName}"?`)) return;
+
+        const res = await sendBg({
             type: 'RESTORE_SESSION',
             folderName: selectedFolder,
             sessionName,
-        });
-        await sendBg({
-            type: 'SET_ACTIVE_SESSION',
-            folderName: selectedFolder,
-            sessionName,
+            force: true,
         });
     };
 
+
     const deleteFolder = async (folderName) => {
-        if (folderName === 'default') {
-            alert('The default folder cannot be deleted.');
+        if (folderName === "default") {
+            alert("The default folder cannot be deleted.");
             return;
         }
-        if (
-            !confirm(
-                `Delete folder "${folderName}" and all contained sessions?`
-            )
-        )
+
+        if (!confirm(`Delete folder "${folderName}" and all contained sessions?`))
             return;
-        await sendBg({ type: 'DELETE_FOLDER', folderName });
+
+        const resp = await sendBg({ type: "DELETE_FOLDER", folderName });
+
+        if (resp?.error === "ACTIVE_FOLDER_DELETE_BLOCKED") {
+            alert("Cannot delete the folder containing the active session.");
+            return;
+        }
+
         setSelectedSession(null);
     };
+
 
     const sessionsForSelected = Object.keys(
         foldersObj[selectedFolder]?.sessions || {}
@@ -580,15 +596,9 @@ export default function App() {
                                 }}
                             >
                                 <div
-                                    onClick={async () => {
-                                        setSelectedSession(sessionName);
-                                        // set as active so autosave works
-                                        await sendBg({
-                                            type: 'SET_ACTIVE_SESSION',
-                                            folderName: selectedFolder,
-                                            sessionName,
-                                        });
-                                    }}
+                                    onClick={() =>
+                                        setSelectedSession(sessionName)
+                                    }
                                     style={{
                                         cursor: 'pointer',
                                         padding: '8px 10px',
