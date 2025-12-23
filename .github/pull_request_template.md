@@ -1,16 +1,16 @@
-## 🔥 Summary
+## Summary
 
-Describe the purpose of this PR.
-
----
-
-## ✅ Changes
-
-- What was added/updated/fixed?
-- Bullet list of changes
+<!-- Describe the purpose of this PR. -->
 
 ---
 
-## 📝 Notes (optional)
+## Changes
 
-Anything additional reviewers should know.
+<!-- - What was added/updated/fixed? -->
+<!-- - Bullet list of changes -->
+
+---
+
+## Notes (optional)
+
+<!-- Anything additional reviewers should know. -->
