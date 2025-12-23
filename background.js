@@ -337,7 +337,7 @@ chrome.tabs.onCreated.addListener(async (tab) => {
         const win = await chrome.windows.getCurrent();
         if (tab.windowId !== win.id) return;
 
-        await updateTabInActiveSession(tab);
+        await updateTabInActiveSession(tab, { source: "created" });
 
     } catch (e) {
         console.error("Autosave onCreated failed:", e);
@@ -354,7 +354,7 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
         const win = await chrome.windows.getCurrent();
         if (tab.windowId !== win.id) return;
 
-        await updateTabInActiveSession(tab);
+        await updateTabInActiveSession(tab, { source: "activated" });
 
         const activeSession = await getActiveSession();
         if (!activeSession) return;
@@ -372,7 +372,7 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
     }
 });
 
-chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+chrome.tabs.onUpdated.addListener(async (changeInfo, tab) => {
     try {
         if (isRestoring) return;
 
@@ -391,7 +391,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
         const win = await chrome.windows.getCurrent();
         if (tab.windowId !== win.id) return;
 
-        await updateTabInActiveSession(tab);
+        await updateTabInActiveSession(tab, { source: "updated", changeInfo });
 
     } catch (e) {
         console.error("Autosave onUpdated failed:", e);
