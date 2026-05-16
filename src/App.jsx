@@ -6,6 +6,7 @@ import {
     Star,
     ChevronDown,
     X,
+    Copy,
 } from 'lucide-react';
  
 function sendBg(msg) {
@@ -233,6 +234,24 @@ export default function App() {
         setSelectedSession(null);
     };
 
+    const deleteTabFromSession = async (tabIndex) => {
+        const folderKey = selectedFolder || 'default';
+        const sessionName = selectedSession;
+        if (!sessionName) return;
+
+        const data = await chrome.storage.local.get(['folders']);
+        const f = data.folders || {};
+        const sessionTabs = f[folderKey]?.sessions?.[sessionName];
+        if (!Array.isArray(sessionTabs) || tabIndex < 0 || tabIndex >= sessionTabs.length) return;
+
+        sessionTabs.splice(tabIndex, 1);
+        f[folderKey].sessions[sessionName] = sessionTabs;
+        await chrome.storage.local.set({ folders: f });
+    };
+
+    const copyTabUrl = (url) => {
+        navigator.clipboard.writeText(url).catch(() => {});
+    };
 
     const sessionsForSelected = Object.keys(
         foldersObj[selectedFolder]?.sessions || {}
@@ -684,16 +703,24 @@ export default function App() {
                                             style={{
                                                 display: 'flex',
                                                 alignItems: 'center',
-                                                justifyContent: 'space-between',
+                                                gap: 12,
                                                 padding: 12,
                                                 borderRadius: 8,
                                                 border: '1px solid #e6e6e6',
                                                 background: '#fff',
+                                                minWidth: 0,
                                             }}
                                         >
-                                            <div>
+                                            {/* Tab info — truncated */}
+                                            <div style={{ flex: 1, minWidth: 0 }}>
                                                 <div
-                                                    style={{ fontWeight: 600 }}
+                                                    style={{
+                                                        fontWeight: 600,
+                                                        whiteSpace: 'nowrap',
+                                                        overflow: 'hidden',
+                                                        textOverflow: 'ellipsis',
+                                                    }}
+                                                    title={tab.title || tab.url}
                                                 >
                                                     {tab.title || tab.url}
                                                 </div>
@@ -701,30 +728,83 @@ export default function App() {
                                                     style={{
                                                         color: '#6b7280',
                                                         fontSize: 13,
+                                                        whiteSpace: 'nowrap',
+                                                        overflow: 'hidden',
+                                                        textOverflow: 'ellipsis',
                                                     }}
+                                                    title={tab.url}
                                                 >
                                                     {tab.url}
                                                 </div>
                                             </div>
+
+                                            {/* Action buttons */}
                                             <div
                                                 style={{
                                                     display: 'flex',
-                                                    gap: 8,
+                                                    alignItems: 'center',
+                                                    gap: 6,
+                                                    flexShrink: 0,
                                                 }}
                                             >
+                                                <button
+                                                    onClick={() => copyTabUrl(tab.url)}
+                                                    title="Copy link"
+                                                    style={{
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        justifyContent: 'center',
+                                                        width: 28,
+                                                        height: 28,
+                                                        padding: 0,
+                                                        border: '1px solid #e5e7eb',
+                                                        borderRadius: 6,
+                                                        background: '#fff',
+                                                        cursor: 'pointer',
+                                                        color: '#6b7280',
+                                                    }}
+                                                >
+                                                    <Copy style={{ width: 14, height: 14 }} />
+                                                </button>
                                                 <a
                                                     href={tab.url}
                                                     target="_blank"
                                                     rel="noreferrer"
-                                                    title="Open"
+                                                    title="Open in new tab"
+                                                    style={{
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        justifyContent: 'center',
+                                                        width: 28,
+                                                        height: 28,
+                                                        border: '1px solid #e5e7eb',
+                                                        borderRadius: 6,
+                                                        background: '#fff',
+                                                        color: '#6b7280',
+                                                        textDecoration: 'none',
+                                                    }}
                                                 >
-                                                    <ExternalLink
-                                                        style={{
-                                                            width: 16,
-                                                            height: 16,
-                                                        }}
-                                                    />
+                                                    <ExternalLink style={{ width: 14, height: 14 }} />
                                                 </a>
+                                                <button
+                                                    onClick={() => deleteTabFromSession(idx)}
+                                                    title="Remove tab"
+                                                    style={{
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        justifyContent: 'center',
+                                                        width: 28,
+                                                        height: 28,
+                                                        padding: 0,
+                                                        border: '1px solid #e5e7eb',
+                                                        borderRadius: 6,
+                                                        background: '#fff',
+                                                        cursor: 'pointer',
+                                                        color: '#ef4444',
+                                                    }}
+                                                >
+                                                    <X style={{ width: 14, height: 14 }} />
+                                                </button>
                                             </div>
                                         </div>
                                     ))}
