@@ -244,9 +244,17 @@ export default function App() {
         const sessionTabs = f[folderKey]?.sessions?.[sessionName];
         if (!Array.isArray(sessionTabs) || tabIndex < 0 || tabIndex >= sessionTabs.length) return;
 
+        const removedTab = sessionTabs[tabIndex];
         sessionTabs.splice(tabIndex, 1);
         f[folderKey].sessions[sessionName] = sessionTabs;
         await chrome.storage.local.set({ folders: f });
+
+        if (removedTab?.id) {
+            try {
+                await chrome.tabs.remove(removedTab.id);
+            } catch {
+            }
+        }
     };
 
     const copyTabUrl = (url) => {
