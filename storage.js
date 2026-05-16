@@ -179,8 +179,36 @@ async function removeTabFromActiveSession(tabId) {
     await saveFolders(folders);
 }
 
+async function createNewTabInActiveSession(tab) {
+    const active = await getActiveSession();
+    if (!active) return;
+
+    const folders = await getAllFolders();
+    let sessionTabs = folders[active.folder].sessions[active.session] || [];
+
+    // Prevent double insert for same tab.id
+    if (sessionTabs.some(t => t.id === tab.id)) return;
+
+    const newTab = {
+        id: tab.id,
+        url: tab.url || tab.pendingUrl || "",
+        title: tab.title || "",
+        favicon: tab.favIconUrl || "",
+        active: !!tab.active
+    };
+    sessionTabs.splice(
+        Math.min(tab.index ?? sessionTabs.length, sessionTabs.length),
+        0,
+        newTab
+    );
+    console.log("oncreated passed this point")
+
+    folders[active.folder].sessions[active.session] = sessionTabs;
+    await saveFolders(folders);
+}
+
 export {
     getAllFolders, saveFolders, createFolder, getFolders, saveSession,
     deleteSession, deleteFolder, getSessionsInFolder, setActiveSession,
-    getActiveSession, updateTabInActiveSession, removeTabFromActiveSession
+    getActiveSession, updateTabInActiveSession, removeTabFromActiveSession, createNewTabInActiveSession
 };

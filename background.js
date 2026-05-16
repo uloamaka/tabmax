@@ -1,11 +1,11 @@
 import {
     createFolder, saveSession, setActiveSession, getActiveSession,
     getSessionsInFolder, updateTabInActiveSession, removeTabFromActiveSession,
-    deleteFolder, deleteSession, getFolders
+    deleteFolder, deleteSession, getFolders, createNewTabInActiveSession
 } from "./storage.js";
 
-let isRestoring = false;
-let restoreHasRun = false;
+let isRestoring = false;     // Guards against autosave during session restore
+let restoreHasRun = false;  // Ensures last session restore runs once per startup
 
 const UI_PATH = "dist/index.html"; 
 const UI_URL = chrome.runtime.getURL(UI_PATH);
@@ -29,6 +29,7 @@ function isValidURL(url) {
     return true;
 }
 
+// Ensures the TabMax UI tab exists, pinned at index 0
 async function ensureTabMaxInWindow(windowId) {
     const tabs = await chrome.tabs.query({ windowId });
     let tabMax = tabs.find(t => {
@@ -38,7 +39,8 @@ async function ensureTabMaxInWindow(windowId) {
             return false;
         }
     });
-
+    
+    // Reuse existing TabMax tab if present
     if (tabMax) {
         try {
             if (!tabMax.pinned) {
@@ -51,7 +53,8 @@ async function ensureTabMaxInWindow(windowId) {
         return tabMax.id;
     }
 
-    const created = await chrome.tabs.create({ url: UI_URL, active: false });
+    // Create and pin TabMax tab if missing
+    const created = await chrome.tabs.create({ url: UI_URL, active: false, windowId });
     try {
         await chrome.tabs.update(created.id, { pinned: true });
         await chrome.tabs.move(created.id, { index: 0 });
@@ -62,6 +65,7 @@ async function ensureTabMaxInWindow(windowId) {
     return created.id;
 }
 
+// Removes all tabs except the TabMax control tab
 async function clearNonTabMaxTabs(windowId, exceptTabId) {
     const tabs = await chrome.tabs.query({ windowId });
     const toRemove = tabs.filter(t => t.id !== exceptTabId).map(t => t.id);
@@ -75,10 +79,12 @@ async function clearNonTabMaxTabs(windowId, exceptTabId) {
     return toRemove;
 }
 
+// Persist current window tabs as a session snapshot
 async function saveCurrentSession(folderName, sessionName) {
     try {
         const tabs = await chrome.tabs.query({ currentWindow: true });
 
+        // Filter to persistable URLs only
         const filteredTabs = tabs.filter(tab => {
             const url = tab.url || "";
             return (
@@ -106,11 +112,11 @@ async function saveCurrentSession(folderName, sessionName) {
     }
 }
 
+// Restore a saved session into the current window
 async function restoreSession(folderName, sessionName, { force = false } = {}) {
-    if (isRestoring) {
-        console.warn("Restore already in progress");
-        return;
-    }
+    // Prevent concurrent restore runs
+    if (isRestoring) { return; }
+
     isRestoring = true;
 
     let cleaned = false;
@@ -122,8 +128,8 @@ async function restoreSession(folderName, sessionName, { force = false } = {}) {
     };
 
     try {
+        // Skip restore if session is already active (unless forced)
         const active = await getActiveSession();
-
         if (
             !force &&
             active &&
@@ -138,9 +144,12 @@ async function restoreSession(folderName, sessionName, { force = false } = {}) {
         const tabs = sessions[sessionName] || [];
 
         const win = await chrome.windows.getCurrent();
+
+        // Ensure TabMax control tab exists and clear others
         const tabMaxId = await ensureTabMaxInWindow(win.id);
         await clearNonTabMaxTabs(win.id, tabMaxId);
-
+        
+        // Fallback when session is empty
         if (!tabs.length) {
             await chrome.tabs.create({
                 url: "chrome://newtab",
@@ -153,12 +162,11 @@ async function restoreSession(folderName, sessionName, { force = false } = {}) {
             return;
         }
 
+        // Recreate tabs in saved order
         const createdIds = [];
         for (let i = 0; i < tabs.length; i++) {
             const t = tabs[i];
             if (!t?.url) continue;
-            if (t.url.startsWith("chrome://") || t.url.startsWith("chrome-extension://"))
-                continue;
 
             try {
                 const created = await chrome.tabs.create({
@@ -169,7 +177,7 @@ async function restoreSession(folderName, sessionName, { force = false } = {}) {
                 });
                 createdIds.push(created.id);
             } catch (e) {
-                console.warn("Failed to create tab:", t.url, e);
+                // Ignore invalid or blocked URLs
             }
         }
 
@@ -204,7 +212,9 @@ async function restoreSession(folderName, sessionName, { force = false } = {}) {
     }
 }
 
+// Create an empty session and immediately switch to it
 async function createAndSwitchToSession(folderName, sessionName) {
+    // Temporarily suppress autosave during setup
     isRestoring = true;
     try {
         const existing = await getFolders();
@@ -213,10 +223,10 @@ async function createAndSwitchToSession(folderName, sessionName) {
         }
 
         const all = await chrome.storage.local.get(['folders']);
-        const f = all.folders || {};
-        if (!f[folderName]) f[folderName] = { sessions: {} };
-        f[folderName].sessions[sessionName] = [];
-        await chrome.storage.local.set({ folders: f });
+        const folders = all.folders || {};
+        if (!folders[folderName]) folders[folderName] = { sessions: {} };
+        folders[folderName].sessions[sessionName] = [];
+        await chrome.storage.local.set({ folders: folders });
 
         const win = await chrome.windows.getCurrent();
         const tabMaxId = await ensureTabMaxInWindow(win.id);
@@ -232,7 +242,9 @@ async function createAndSwitchToSession(folderName, sessionName) {
         console.error("createAndSwitchToSession failed:", err);
         return { success: false, error: String(err) };
     } finally {
-        setTimeout(() => { isRestoring = false; }, 400);
+        // Await a brief delay so pending tab events fire while isRestoring is still true
+        await new Promise(resolve => setTimeout(resolve, 400));
+        isRestoring = false;
     }
 }
 
@@ -248,8 +260,10 @@ async function tryRestoreLastSession() {
     await restoreSession(active.folder, active.session, { force: true });
 }
 
+// Restore last active session on browser startup
 chrome.runtime.onStartup.addListener(async () => {
     const windows = await chrome.windows.getAll();
+
     if (windows.length > 0) {
         tryRestoreLastSession();
         return;
@@ -261,89 +275,79 @@ chrome.runtime.onStartup.addListener(async () => {
     });
 });
 
+// Handle messages from UI
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    let handled = false;
-
     (async () => {
-        if (msg.type === "CREATE_FOLDER" || msg.type === "SAVE_FOLDER") {
-            await createFolder(msg.folderName);
-            sendResponse({ success: true });
-            handled = true;
-        }
-
-        if (msg.type === "SAVE_SESSION") {
-            const existingFolders = await getFolders();
-            if (!existingFolders[msg.folderName] && msg.folderName !== "") {
+        try {
+            if (msg.type === "CREATE_FOLDER" || msg.type === "SAVE_FOLDER") {
                 await createFolder(msg.folderName);
-            }
-            const res = await saveCurrentSession(msg.folderName, msg.sessionName);
-            if (msg.setActive) await setActiveSession(msg.folderName, msg.sessionName);
-            sendResponse(res);
-            handled = true;
-        }
+                sendResponse({ success: true });
 
-        if (msg.type === "RESTORE_SESSION") {
-            const { folderName, sessionName } = msg;
-            await restoreSession(folderName, sessionName);
+            } else if (msg.type === "SAVE_SESSION") {
+                const existingFolders = await getFolders();
+                if (!existingFolders[msg.folderName] && msg.folderName !== "") {
+                    await createFolder(msg.folderName);
+                }
+                const res = await saveCurrentSession(msg.folderName, msg.sessionName);
+                if (msg.setActive) await setActiveSession(msg.folderName, msg.sessionName);
+                sendResponse(res);
 
-            sendResponse({ success: true });
-            handled = true;
-        }
+            } else if (msg.type === "RESTORE_SESSION") {
+                const { folderName, sessionName } = msg;
+                await restoreSession(folderName, sessionName);
+                sendResponse({ success: true });
 
-        if (msg.type === "SET_ACTIVE_SESSION") {
-            await setActiveSession(msg.folderName, msg.sessionName);
-            sendResponse({ success: true });
-            handled = true;
-        }
+            } else if (msg.type === "SET_ACTIVE_SESSION") {
+                await setActiveSession(msg.folderName, msg.sessionName);
+                sendResponse({ success: true });
 
-        if (msg.type === "CREATE_AND_SWITCH_SESSION") {
-            const folderName = msg.folderName || 'default';
-            const sessionName = msg.sessionName;
-            if (!sessionName) {
-                sendResponse({ success: false, error: "sessionName required" });
-                handled = true;
+            } else if (msg.type === "CREATE_AND_SWITCH_SESSION") {
+                const folderName = msg.folderName || 'default';
+                const sessionName = msg.sessionName;
+                if (!sessionName) {
+                    sendResponse({ success: false, error: "sessionName required" });
+                } else {
+                    const r = await createAndSwitchToSession(folderName, sessionName);
+                    sendResponse(r);
+                }
+
+            } else if (msg.type === "DELETE_FOLDER") {
+                const result = await deleteFolder(msg.folderName);
+                sendResponse(result);
+
+            } else if (msg.type === "DELETE_SESSION") {
+                const result = await deleteSession(msg.folderName, msg.sessionName);
+                sendResponse(result);
+
             } else {
-                const r = await createAndSwitchToSession(folderName, sessionName);
-                sendResponse(r);
-                handled = true;
+                sendResponse({ success: false, error: `Unknown message type: ${msg.type}` });
             }
+        } catch (err) {
+            console.error("Message handler error:", err);
+            sendResponse({ success: false, error: String(err) });
         }
-
-        if (msg.type === "DELETE_FOLDER") {
-            const result = await deleteFolder(msg.folderName);
-            sendResponse(result);
-            handled = true;
-        }
-
-        if (msg.type === "DELETE_SESSION") {
-            const result = await deleteSession(msg.folderName, msg.sessionName);
-            sendResponse(result); 
-            handled = true;
-        }
-
-
-        if (handled) return;
     })();
 
     return true;
 });
 
+// Persist newly created tabs (including duplicates)
 chrome.tabs.onCreated.addListener(async (tab) => {
     try {
         if (isRestoring) return;
 
-        if (!tab.url || !isValidURL(tab.url)) return;
-
+        if (!tab || !isValidURL(tab.pendingUrl || tab.url)) return;
+        
         const win = await chrome.windows.getCurrent();
         if (tab.windowId !== win.id) return;
 
-        await updateTabInActiveSession(tab);
-
+        await createNewTabInActiveSession(tab);
     } catch (e) {
         console.error("Autosave onCreated failed:", e);
-    }
+    } 
 });
-
+ 
+// Update active tab state, skipping tabs still being created
 chrome.tabs.onActivated.addListener(async ({ tabId }) => {
     try {
         if (isRestoring) return;
@@ -372,6 +376,7 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
     }
 });
 
+// Autosave meaningful tab updates after creation settles
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     try {
         if (isRestoring) return;
@@ -398,15 +403,17 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     }
 });
 
-chrome.tabs.onRemoved.addListener((tabId) => {
+// Remove tab from active session when closed
+chrome.tabs.onRemoved.addListener(async (tabId) => {
     if (isRestoring) return;
     try {
-        removeTabFromActiveSession(tabId);
+        await removeTabFromActiveSession(tabId);
     } catch (e) {
         console.error("Autosave onRemoved failed:", e);
     }
 });
 
+// Focus existing TabMax tab or create one if missing
 chrome.action.onClicked.addListener(async () => {
     const url = UI_URL;
 
@@ -423,3 +430,12 @@ chrome.action.onClicked.addListener(async () => {
 
     chrome.tabs.move(tab.id, { index: 0 });
 });
+
+// TODO:
+// chrome.runtime.onInstalled.addListener(({reason}) => { 
+//   if (reason === 'install') {
+//     chrome.tabs.create({
+//       url: "onboarding.html"
+//     });
+//   }
+// });
