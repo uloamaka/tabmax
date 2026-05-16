@@ -2,6 +2,7 @@ const STORAGE_KEY = "folders";
 const ACTIVE_SESSION_KEY = "activeSession";
 
 async function getAllFolders() {
+    // retrieve folders from storage
     const data = await chrome.storage.local.get([STORAGE_KEY]);
     const folders = data[STORAGE_KEY] || {};
 
@@ -108,13 +109,19 @@ async function getActiveSession() {
     return { folder: session.folder, session: session.session };
 }
 
-function findTabIndexByIdOrUrl(sessionTabs, tab) {
+function findTabIndexById(sessionTabs, tab) {
     if (!Array.isArray(sessionTabs)) return -1;
 
     if (tab.id != null) {
         const byId = sessionTabs.findIndex(t => t.id === tab.id);
         if (byId !== -1) return byId;
     }
+
+    return -1;
+}
+
+function findTabIndexByUrl(sessionTabs, tab) { 
+    if (!Array.isArray(sessionTabs)) return -1;
 
     if (tab.url) {
         const byUrl = sessionTabs.findIndex(t => t.url === tab.url);
@@ -124,8 +131,7 @@ function findTabIndexByIdOrUrl(sessionTabs, tab) {
     return -1;
 }
 
-
-async function updateTabInActiveSession(tab) {
+async function updateTabInActiveSession(tab, { source, changeInfo } = {}) {
     const active = await getActiveSession();
     if (!active) return;
 
@@ -137,29 +143,57 @@ async function updateTabInActiveSession(tab) {
     let sessionTabs = folders[folder].sessions[session];
     if (!Array.isArray(sessionTabs)) sessionTabs = [];
 
-    const idx = findTabIndexByIdOrUrl(sessionTabs, tab);
+    // Fast exit for useless onUpdated events
+    if (source === "updated" && changeInfo) {
+        const hasMeaningfulChange =
+            changeInfo.url ||
+            changeInfo.title ||
+            changeInfo.favIconUrl ||
+            changeInfo.status === "complete";
+
+        if (!hasMeaningfulChange) return;
+    }
+
+    let idx = findTabIndexById(sessionTabs, tab);
+
+    // URL fallback ONLY during restore rebind
+    if (idx === -1 && source === "updated" && tab.url) {
+        idx = findTabIndexByUrl(sessionTabs, tab);
+    }
 
     if (idx !== -1) {
-        Object.assign(sessionTabs[idx], {
-            id: tab.id || sessionTabs[idx].id,
-            url: tab.url || sessionTabs[idx].url,
-            title: tab.title || sessionTabs[idx].title,
-            favicon: tab.favIconUrl || sessionTabs[idx].favicon,
-            active: !!tab.active
-        });
-    } else {
+        const existing = sessionTabs[idx];
+
+        // Update fields only if they actually changed
+        if (changeInfo?.url) existing.url = tab.url;
+        if (changeInfo?.title) existing.title = tab.title;
+        if (changeInfo?.favIconUrl) existing.favicon = tab.favIconUrl;
+
+        // Always keep ID rebound
+        if (tab.id != null) existing.id = tab.id;
+
+        // Activation is special
+        if (source === "activated") {
+            existing.active = true;
+        } else if (changeInfo?.status === "complete") {
+            existing.active = !!tab.active;
+        }
+    }
+
+    else {
         sessionTabs.push({
-            id: tab.id || null,
-            url: tab.url || "",
-            title: tab.title || "",
-            favicon: tab.favIconUrl || "",
+            id: tab.id ?? null,
+            url: tab.url ?? "",
+            title: tab.title ?? "",
+            favicon: tab.favIconUrl ?? "",
             active: !!tab.active
         });
     }
-
+    
     folders[folder].sessions[session] = sessionTabs;
     await saveFolders(folders);
 }
+
 
 async function removeTabFromActiveSession(tabId) {
     const active = await getActiveSession();
@@ -168,11 +202,13 @@ async function removeTabFromActiveSession(tabId) {
     const { folder, session } = active;
     const folders = await getAllFolders();
 
+    // Check if folder and session exist
     if (!folders[folder]?.sessions?.[session]) return;
 
     let sessionTabs = folders[folder].sessions[session];
     if (!Array.isArray(sessionTabs)) sessionTabs = [];
 
+    // Removes the tab with the matching tabId
     sessionTabs = sessionTabs.filter(t => t.id !== tabId);
 
     folders[folder].sessions[session] = sessionTabs;

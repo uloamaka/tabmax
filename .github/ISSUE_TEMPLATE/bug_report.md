@@ -20,7 +20,7 @@ assignees: ""
 ## Screenshots
 <!-- If applicable. -->
 
-## 📦 Environment
+## Environment
 - Browser:
 - OS:
 - Version:
