@@ -148,7 +148,7 @@ async function restoreSession(folderName, sessionName, { force = false } = {}) {
         // Ensure TabMax control tab exists and clear others
         const tabMaxId = await ensureTabMaxInWindow(win.id);
         await clearNonTabMaxTabs(win.id, tabMaxId);
-        
+
         // Fallback when session is empty
         if (!tabs.length) {
             await chrome.tabs.create({
@@ -158,6 +158,7 @@ async function restoreSession(folderName, sessionName, { force = false } = {}) {
                 index: 1,
             });
             await setActiveSession(folderName, sessionName);
+            await saveCurrentSession(folderName, sessionName); // re-snapshot with real IDs
             finish();
             return;
         }
@@ -189,6 +190,7 @@ async function restoreSession(folderName, sessionName, { force = false } = {}) {
                 index: 1,
             });
             await setActiveSession(folderName, sessionName);
+            await saveCurrentSession(folderName, sessionName); // re-snapshot with real IDs
             finish();
             return;
         }
@@ -204,6 +206,7 @@ async function restoreSession(folderName, sessionName, { force = false } = {}) {
         await chrome.tabs.update(createdIds[targetIndex], { active: true });
 
         await setActiveSession(folderName, sessionName);
+        await saveCurrentSession(folderName, sessionName); // re-snapshot with real IDs
 
     } catch (err) {
         console.error("Restore failed:", err);
