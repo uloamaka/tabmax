@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
     Plus,
     Folder as FolderIcon,
@@ -8,7 +8,7 @@ import {
     X,
     Copy,
 } from 'lucide-react';
- 
+
 function sendBg(msg) {
     return new Promise((resolve) => {
         try {
@@ -51,6 +51,16 @@ const StorageClient = {
     },
 };
 
+function formatRelativeTime(ts) {
+    if (!ts) return '';
+    const diffMin = Math.round((Date.now() - ts) / 60000);
+    if (diffMin < 1) return 'just now';
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffHr = Math.round(diffMin / 60);
+    if (diffHr < 24) return `${diffHr}h ago`;
+    return `${Math.round(diffHr / 24)}d ago`;
+}
+
 export default function App() {
     const [foldersObj, setFoldersObj] = useState({}); // { folderName: { sessions: { sessionName: [tabs] } } }
     const [allFolderNames, setAllFolderNames] = useState([]);
@@ -60,6 +70,11 @@ export default function App() {
     const [dropdownOpen, setDropdownOpen] = useState(false);
     const [creatingFolder, setCreatingFolder] = useState(false);
     const [newFolderName, setNewFolderName] = useState('');
+    const [renamingSession, setRenamingSession] = useState(null); // session name being renamed
+    const [renameValue, setRenameValue] = useState('');
+    const [sessionMeta, setSessionMeta] = useState({}); // { "folder/session": lastModifiedTimestamp }
+
+    const fileInputRef = useRef(null);
 
     const ensureDefaultFolder = useCallback(async (folders) => {
         if (!folders || typeof folders !== 'object') return;
@@ -74,7 +89,7 @@ export default function App() {
     const loadInitial = useCallback(async () => {
         const folders = await StorageClient.getAll();
         await ensureDefaultFolder(folders);
-        const fresh = await StorageClient.getAll(); 
+        const fresh = await StorageClient.getAll();
         setFoldersObj(fresh);
         const names = Object.keys(fresh);
         setAllFolderNames(names);
@@ -101,6 +116,7 @@ export default function App() {
         }
     }, [ensureDefaultFolder]);
 
+    // Subscribe to 'folders' changes
     useEffect(() => {
         loadInitial();
         const unsub = StorageClient.subscribe((newFolders) => {
@@ -124,10 +140,63 @@ export default function App() {
         return unsub;
     }, []);
 
+    // Subscribe to 'sessionMeta' changes (last-modified tracking) — separate effect, top-level
+    useEffect(() => {
+        chrome.storage.local.get(['sessionMeta']).then((d) =>
+            setSessionMeta(d.sessionMeta || {})
+        );
+        function listener(changes, area) {
+            if (area === 'local' && changes.sessionMeta) {
+                setSessionMeta(changes.sessionMeta.newValue || {});
+            }
+        }
+        chrome.storage.onChanged.addListener(listener);
+        return () => chrome.storage.onChanged.removeListener(listener);
+    }, []);
+
+    const triggerImport = () => fileInputRef.current?.click();
+
+    const handleImportFile = async (e) => {
+        const file = e.target.files?.[0];
+        e.target.value = ''; // reset so re-selecting the same file works next time
+        if (!file) return;
+
+        let parsed;
+        try {
+            const text = await file.text();
+            parsed = JSON.parse(text);
+        } catch {
+            alert("Could not read file — make sure it's a valid TabMax export.");
+            return;
+        }
+
+        const res = await sendBg({ type: 'IMPORT_FOLDERS', data: parsed });
+        if (res?.success) {
+            alert(`Imported: ${res.importedFolderNames.join(', ')}`);
+        } else {
+            alert('Import failed: ' + (res?.error || 'unknown error'));
+        }
+    };
+
+    const exportAll = async () => {
+        const folders = await StorageClient.getAll();
+        const json = JSON.stringify(folders, null, 2);
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `tabmax-backup-${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    };
+
     const handleSelectFolder = async (folderName) => {
         setDropdownOpen(false);
         setSelectedFolder(folderName);
-        setSelectedSession(null); 
+        setSelectedSession(null);
         await StorageClient.setLastFolder(folderName);
     };
 
@@ -137,7 +206,7 @@ export default function App() {
         if (name === '') return;
 
         const res = await sendBg({ type: 'CREATE_FOLDER', folderName: name });
-    
+
         if (res && res.success !== false) {
             setCreatingFolder(false);
             setNewFolderName('');
@@ -169,7 +238,7 @@ export default function App() {
         const data = await chrome.storage.local.get(['folders']);
         const f = data.folders || {};
         if (!f[folderKey]) f[folderKey] = { sessions: {} };
-        f[folderKey].sessions[name] = []; 
+        f[folderKey].sessions[name] = [];
         await chrome.storage.local.set({ folders: f });
 
         setNewSessionName('');
@@ -187,13 +256,13 @@ export default function App() {
         if (!confirm(`Delete session "${sessionName}"?`)) return;
 
         const resp = await sendBg({
-            type: "DELETE_SESSION",
+            type: 'DELETE_SESSION',
             folderName: selectedFolder,
             sessionName,
         });
 
-        if (resp?.error === "ACTIVE_SESSION_DELETE_BLOCKED") {
-            alert("Cannot delete the active session. Please switch sessions first.");
+        if (resp?.error === 'ACTIVE_SESSION_DELETE_BLOCKED') {
+            alert('Cannot delete the active session. Please switch sessions first.');
             return;
         }
 
@@ -202,11 +271,10 @@ export default function App() {
         }
     };
 
-
     const restoreSession = async (sessionName) => {
         if (!confirm(`Restore session "${sessionName}"?`)) return;
 
-        const res = await sendBg({
+        await sendBg({
             type: 'RESTORE_SESSION',
             folderName: selectedFolder,
             sessionName,
@@ -214,20 +282,66 @@ export default function App() {
         });
     };
 
+    const startRename = (sessionName) => {
+        setRenamingSession(sessionName);
+        setRenameValue(sessionName);
+    };
+
+    const submitRename = async (oldName) => {
+        const newName = renameValue.trim();
+        if (!newName || newName === oldName) {
+            setRenamingSession(null);
+            return;
+        }
+        const res = await sendBg({
+            type: 'RENAME_SESSION',
+            folderName: selectedFolder,
+            oldSessionName: oldName,
+            newSessionName: newName,
+        });
+        if (res?.success) {
+            if (selectedSession === oldName) setSelectedSession(newName);
+            setRenamingSession(null);
+        } else {
+            alert(
+                res?.error === 'SESSION_NAME_EXISTS'
+                    ? `A session named "${newName}" already exists.`
+                    : 'Could not rename session.'
+            );
+        }
+    };
+
+    const duplicateSession = async (sessionName) => {
+        const newName = prompt('Name for the duplicated session:', `${sessionName} copy`);
+        if (!newName || !newName.trim()) return;
+        const res = await sendBg({
+            type: 'DUPLICATE_SESSION',
+            folderName: selectedFolder,
+            sessionName,
+            newSessionName: newName.trim(),
+        });
+        if (!res?.success) {
+            alert(
+                res?.error === 'SESSION_NAME_EXISTS'
+                    ? `A session named "${newName.trim()}" already exists.`
+                    : 'Could not duplicate session.'
+            );
+        }
+    };
 
     const deleteFolder = async (folderName) => {
-        if (folderName === "default") {
-            alert("The default folder cannot be deleted.");
+        if (folderName === 'default') {
+            alert('The default folder cannot be deleted.');
             return;
         }
 
         if (!confirm(`Delete folder "${folderName}" and all contained sessions?`))
             return;
 
-        const resp = await sendBg({ type: "DELETE_FOLDER", folderName });
+        const resp = await sendBg({ type: 'DELETE_FOLDER', folderName });
 
-        if (resp?.error === "ACTIVE_FOLDER_DELETE_BLOCKED") {
-            alert("Cannot delete the folder containing the active session.");
+        if (resp?.error === 'ACTIVE_FOLDER_DELETE_BLOCKED') {
+            alert('Cannot delete the folder containing the active session.');
             return;
         }
 
@@ -253,6 +367,7 @@ export default function App() {
             try {
                 await chrome.tabs.remove(removedTab.id);
             } catch {
+                // tab may already be gone; ignore
             }
         }
     };
@@ -295,6 +410,23 @@ export default function App() {
                     <h1 style={{ fontSize: 18, margin: 0 }}>TabMax</h1>
                 </div>
 
+                {/* Import / Export */}
+                <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                    <input
+                        type="file"
+                        accept="application/json"
+                        ref={fileInputRef}
+                        onChange={handleImportFile}
+                        style={{ display: 'none' }}
+                    />
+                    <button onClick={triggerImport} style={{ flex: 1 }}>
+                        Import
+                    </button>
+                    <button onClick={exportAll} style={{ flex: 1 }}>
+                        Export All
+                    </button>
+                </div>
+
                 {/* Folder selector (single folder visible at a time) */}
                 <div style={{ marginBottom: 16 }}>
                     <div
@@ -321,9 +453,7 @@ export default function App() {
                             />
                             <div style={{ position: 'relative', flex: 1 }}>
                                 <button
-                                    onClick={() =>
-                                        setDropdownOpen(!dropdownOpen)
-                                    }
+                                    onClick={() => setDropdownOpen(!dropdownOpen)}
                                     style={{
                                         width: '100%',
                                         display: 'flex',
@@ -335,14 +465,10 @@ export default function App() {
                                         background: '#fff',
                                     }}
                                 >
-                                    <span
-                                        style={{ textTransform: 'capitalize' }}
-                                    >
+                                    <span style={{ textTransform: 'capitalize' }}>
                                         {selectedFolder || 'default'}
                                     </span>
-                                    <ChevronDown
-                                        style={{ width: 16, height: 16 }}
-                                    />
+                                    <ChevronDown style={{ width: 16, height: 16 }} />
                                 </button>
 
                                 {dropdownOpen && (
@@ -355,8 +481,7 @@ export default function App() {
                                             background: '#fff',
                                             border: '1px solid #e5e7eb',
                                             borderRadius: 8,
-                                            boxShadow:
-                                                '0 6px 18px rgba(15, 23, 42, 0.08)',
+                                            boxShadow: '0 6px 18px rgba(15, 23, 42, 0.08)',
                                             zIndex: 30,
                                             maxHeight: 260,
                                             overflowY: 'auto',
@@ -364,12 +489,7 @@ export default function App() {
                                     >
                                         <div style={{ padding: 8 }}>
                                             {allFolderNames.length === 0 ? (
-                                                <div
-                                                    style={{
-                                                        padding: 8,
-                                                        color: '#6b7280',
-                                                    }}
-                                                >
+                                                <div style={{ padding: 8, color: '#6b7280' }}>
                                                     No folders
                                                 </div>
                                             ) : (
@@ -379,8 +499,7 @@ export default function App() {
                                                         style={{
                                                             display: 'flex',
                                                             alignItems: 'center',
-                                                            justifyContent:
-                                                                'space-between',
+                                                            justifyContent: 'space-between',
                                                             padding: '8px',
                                                             borderRadius: 6,
                                                             background:
@@ -391,33 +510,24 @@ export default function App() {
                                                         }}
                                                     >
                                                         <div
-                                                            onClick={() =>
-                                                                handleSelectFolder(
-                                                                    fn
-                                                                )
-                                                            }
+                                                            onClick={() => handleSelectFolder(fn)}
                                                             style={{
                                                                 cursor: 'pointer',
                                                                 paddingRight: 8,
-                                                                flexGrow: 1, 
+                                                                flexGrow: 1,
                                                                 fontWeight:
-                                                                    selectedFolder === fn
-                                                                        ? '600'
-                                                                        : '400',
+                                                                    selectedFolder === fn ? '600' : '400',
                                                             }}
                                                         >
                                                             {fn}
                                                         </div>
                                                         <button
                                                             onClick={(e) => {
-                                                                e.stopPropagation(); 
+                                                                e.stopPropagation();
                                                                 deleteFolder(fn);
                                                             }}
                                                             style={{
-                                                                display:
-                                                                    fn === 'default'
-                                                                        ? 'none'
-                                                                        : 'flex',
+                                                                display: fn === 'default' ? 'none' : 'flex',
                                                                 alignItems: 'center',
                                                                 justifyContent: 'center',
                                                                 width: 20,
@@ -429,13 +539,9 @@ export default function App() {
                                                                 cursor: 'pointer',
                                                                 color: '#6b7280',
                                                                 marginLeft: 8,
-                                                                ':hover': {
-                                                                    color: '#ef4444', 
-                                                                    background: '#fecaca',
-                                                                },
                                                             }}
                                                         >
-                                                            <X style={{ width: 14, height: 14 }} /> 
+                                                            <X style={{ width: 14, height: 14 }} />
                                                         </button>
                                                     </div>
                                                 ))
@@ -455,28 +561,13 @@ export default function App() {
                                                 <>
                                                     <input
                                                         value={newFolderName}
-                                                        onChange={(e) =>
-                                                            setNewFolderName(
-                                                                e.target.value
-                                                            )
-                                                        }
+                                                        onChange={(e) => setNewFolderName(e.target.value)}
                                                         placeholder="Folder name"
                                                         onKeyDown={(e) => {
-                                                            if (
-                                                                e.key ===
-                                                                'Enter'
-                                                            )
-                                                                handleCreateFolder();
-                                                            if (
-                                                                e.key ===
-                                                                'Escape'
-                                                            ) {
-                                                                setCreatingFolder(
-                                                                    false
-                                                                );
-                                                                setNewFolderName(
-                                                                    ''
-                                                                );
+                                                            if (e.key === 'Enter') handleCreateFolder();
+                                                            if (e.key === 'Escape') {
+                                                                setCreatingFolder(false);
+                                                                setNewFolderName('');
                                                             }
                                                         }}
                                                         style={{
@@ -487,14 +578,11 @@ export default function App() {
                                                         }}
                                                     />
                                                     <button
-                                                        onClick={
-                                                            handleCreateFolder
-                                                        }
+                                                        onClick={handleCreateFolder}
                                                         style={{
                                                             padding: '8px 10px',
                                                             borderRadius: 6,
-                                                            background:
-                                                                '#2563eb',
+                                                            background: '#2563eb',
                                                             color: '#fff',
                                                             border: 'none',
                                                         }}
@@ -503,12 +591,8 @@ export default function App() {
                                                     </button>
                                                     <button
                                                         onClick={() => {
-                                                            setCreatingFolder(
-                                                                false
-                                                            );
-                                                            setNewFolderName(
-                                                                ''
-                                                            );
+                                                            setCreatingFolder(false);
+                                                            setNewFolderName('');
                                                         }}
                                                         style={{
                                                             padding: '8px',
@@ -522,9 +606,7 @@ export default function App() {
                                                 </>
                                             ) : (
                                                 <button
-                                                    onClick={() =>
-                                                        setCreatingFolder(true)
-                                                    }
+                                                    onClick={() => setCreatingFolder(true)}
                                                     style={{
                                                         display: 'flex',
                                                         alignItems: 'center',
@@ -535,13 +617,7 @@ export default function App() {
                                                         background: '#fff',
                                                     }}
                                                 >
-                                                    <Plus
-                                                        style={{
-                                                            width: 12,
-                                                            height: 12,
-                                                        }}
-                                                    />{' '}
-                                                    New folder
+                                                    <Plus style={{ width: 12, height: 12 }} /> New folder
                                                 </button>
                                             )}
                                         </div>
@@ -585,87 +661,92 @@ export default function App() {
                                 borderRadius: 6,
                             }}
                         >
-                            <span
-                                style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: 8,
-                                }}
-                            >
-                                <Plus style={{ width: 14, height: 14 }} /> Add
-                                Session
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                                <Plus style={{ width: 14, height: 14 }} /> Add Session
                             </span>
                         </button>
                     </div>
                 </div>
 
                 {/* Sessions list (for selected folder only) */}
-                <div
-                    style={{ marginBottom: 8, color: '#6b7280', fontSize: 12 }}
-                >
+                <div style={{ marginBottom: 8, color: '#6b7280', fontSize: 12 }}>
                     SESSIONS in <strong>{selectedFolder}</strong>
                 </div>
 
                 <div>
                     {sessionsForSelected.length === 0 ? (
-                        <div style={{ color: '#6b7280' }}>
-                            No sessions in this folder.
-                        </div>
+                        <div style={{ color: '#6b7280' }}>No sessions in this folder.</div>
                     ) : (
-                        sessionsForSelected.map((sessionName) => (
-                            <div
-                                key={sessionName}
-                                style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'space-between',
-                                    marginBottom: 8,
-                                }}
-                            >
-                                <div
-                                    onClick={() =>
-                                        setSelectedSession(sessionName)
-                                    }
-                                    style={{
-                                        cursor: 'pointer',
-                                        padding: '8px 10px',
-                                        borderRadius: 8,
-                                        background:
-                                            selectedSession === sessionName
-                                                ? '#e0f2fe'
-                                                : '#fff',
-                                        flex: 1,
-                                    }}
-                                >
-                                    {sessionName}
-                                </div>
+                        sessionsForSelected.map((sessionName) => {
+                            const tabCount = (
+                                foldersObj[selectedFolder]?.sessions?.[sessionName] || []
+                            ).length;
+                            const lastModified = sessionMeta[`${selectedFolder}/${sessionName}`];
 
+                            return (
                                 <div
+                                    key={sessionName}
                                     style={{
                                         display: 'flex',
-                                        gap: 8,
-                                        marginLeft: 8,
+                                        alignItems: 'center',
+                                        justifyContent: 'space-between',
+                                        marginBottom: 8,
                                     }}
                                 >
-                                    <button
-                                        onClick={() =>
-                                            restoreSession(sessionName)
-                                        }
-                                        title="Restore"
-                                    >
-                                        Restore
-                                    </button>
-                                    <button
-                                        onClick={() =>
-                                            deleteSession(sessionName)
-                                        }
-                                        title="Delete"
-                                    >
-                                        Delete
-                                    </button>
+                                    {renamingSession === sessionName ? (
+                                        <input
+                                            autoFocus
+                                            value={renameValue}
+                                            onChange={(e) => setRenameValue(e.target.value)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter') submitRename(sessionName);
+                                                if (e.key === 'Escape') setRenamingSession(null);
+                                            }}
+                                            onBlur={() => submitRename(sessionName)}
+                                            style={{
+                                                flex: 1,
+                                                padding: '8px 10px',
+                                                borderRadius: 6,
+                                                border: '1px solid #e5e7eb',
+                                            }}
+                                        />
+                                    ) : (
+                                        <div
+                                            onClick={() => setSelectedSession(sessionName)}
+                                            style={{
+                                                cursor: 'pointer',
+                                                padding: '8px 10px',
+                                                borderRadius: 8,
+                                                background:
+                                                    selectedSession === sessionName ? '#e0f2fe' : '#fff',
+                                                flex: 1,
+                                            }}
+                                        >
+                                            <div>{sessionName}</div>
+                                            <div style={{ fontSize: 12, color: '#9ca3af' }}>
+                                                {tabCount} tab{tabCount !== 1 ? 's' : ''}
+                                                {lastModified ? ` · ${formatRelativeTime(lastModified)}` : ''}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <div style={{ display: 'flex', gap: 8, marginLeft: 8 }}>
+                                        <button onClick={() => restoreSession(sessionName)} title="Restore">
+                                            Restore
+                                        </button>
+                                        <button onClick={() => startRename(sessionName)} title="Rename">
+                                            Rename
+                                        </button>
+                                        <button onClick={() => duplicateSession(sessionName)} title="Duplicate">
+                                            Duplicate
+                                        </button>
+                                        <button onClick={() => deleteSession(sessionName)} title="Delete">
+                                            Delete
+                                        </button>
+                                    </div>
                                 </div>
-                            </div>
-                        ))
+                            );
+                        })
                     )}
                 </div>
             </aside>
@@ -681,9 +762,7 @@ export default function App() {
                     }}
                 >
                     <h2 style={{ margin: 0 }}>
-                        {selectedSession
-                            ? `${selectedSession}`
-                            : 'Select a session'}
+                        {selectedSession ? `${selectedSession}` : 'Select a session'}
                     </h2>
                     <div style={{ color: '#6b7280' }} />
                 </div>
@@ -692,10 +771,7 @@ export default function App() {
                     {selectedSession ? (
                         (() => {
                             const folderKey = selectedFolder || 'default';
-                            const tabs =
-                                foldersObj[folderKey]?.sessions?.[
-                                    selectedSession
-                                ] || [];
+                            const tabs = foldersObj[folderKey]?.sessions?.[selectedSession] || [];
                             if (!tabs || tabs.length === 0) {
                                 return (
                                     <div style={{ color: '#6b7280' }}>

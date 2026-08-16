@@ -1,5 +1,15 @@
 const STORAGE_KEY = "folders";
 const ACTIVE_SESSION_KEY = "activeSession";
+const ACTIVE_WINDOW_KEY = "activeSessionWindowId";
+
+async function setActiveSessionWindowId(windowId) {
+    return chrome.storage.local.set({ [ACTIVE_WINDOW_KEY]: windowId });
+}
+
+async function getActiveSessionWindowId() {
+    const data = await chrome.storage.local.get([ACTIVE_WINDOW_KEY]);
+    return data[ACTIVE_WINDOW_KEY] ?? null;
+}
 
 async function getAllFolders() {
     // retrieve folders from storage
@@ -32,12 +42,11 @@ async function getFolders() {
     return await getAllFolders();
 }
 
+const SESSION_META_KEY = "sessionMeta"; // { "folderName/sessionName": lastModifiedTimestamp }
+
 async function saveSession(folderName, sessionName, tabs) {
     const folders = await getAllFolders();
-
-    if (!folders[folderName]) {
-        folders[folderName] = { sessions: {} };
-    }
+    if (!folders[folderName]) folders[folderName] = { sessions: {} };
 
     const normalized = (tabs || []).map(t => ({
         id: t.id || null,
@@ -49,6 +58,11 @@ async function saveSession(folderName, sessionName, tabs) {
 
     folders[folderName].sessions[sessionName] = normalized;
     await saveFolders(folders);
+
+    const metaData = await chrome.storage.local.get([SESSION_META_KEY]);
+    const meta = metaData[SESSION_META_KEY] || {};
+    meta[`${folderName}/${sessionName}`] = Date.now();
+    await chrome.storage.local.set({ [SESSION_META_KEY]: meta });
 }
 
 async function deleteSession(folderName, sessionName) {
@@ -64,6 +78,47 @@ async function deleteSession(folderName, sessionName) {
         delete folders[folderName].sessions[sessionName];
         await saveFolders(folders);
     }
+
+    return { success: true };
+}
+
+async function renameSession(folderName, oldSessionName, newSessionName) {
+    const folders = await getAllFolders();
+
+    if (!folders[folderName]?.sessions?.[oldSessionName]) {
+        return { success: false, error: "SESSION_NOT_FOUND" };
+    }
+    if (folders[folderName].sessions[newSessionName]) {
+        return { success: false, error: "SESSION_NAME_EXISTS" };
+    }
+
+    folders[folderName].sessions[newSessionName] = folders[folderName].sessions[oldSessionName];
+    delete folders[folderName].sessions[oldSessionName];
+    await saveFolders(folders);
+
+    const active = await getActiveSession();
+    if (active && active.folder === folderName && active.session === oldSessionName) {
+        await setActiveSession(folderName, newSessionName);
+    }
+
+    return { success: true };
+}
+
+async function duplicateSession(folderName, sessionName, newSessionName) {
+    const folders = await getAllFolders();
+
+    if (!folders[folderName]?.sessions?.[sessionName]) {
+        return { success: false, error: "SESSION_NOT_FOUND" };
+    }
+    if (folders[folderName].sessions[newSessionName]) {
+        return { success: false, error: "SESSION_NAME_EXISTS" };
+    }
+
+    const original = folders[folderName].sessions[sessionName];
+    const copy = original.map(t => ({ ...t, id: null }));
+
+    folders[folderName].sessions[newSessionName] = copy;
+    await saveFolders(folders);
 
     return { success: true };
 }
@@ -244,7 +299,7 @@ async function createNewTabInActiveSession(tab) {
 }
 
 export {
-    getAllFolders, saveFolders, createFolder, getFolders, saveSession,
-    deleteSession, deleteFolder, getSessionsInFolder, setActiveSession,
+    getAllFolders, getActiveSessionWindowId, setActiveSessionWindowId, saveFolders, createFolder, getFolders, saveSession,
+    deleteSession, deleteFolder, getSessionsInFolder, setActiveSession, duplicateSession, renameSession,
     getActiveSession, updateTabInActiveSession, removeTabFromActiveSession, createNewTabInActiveSession
 };
