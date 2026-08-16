@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "ext:build": "vite build && echo '✅ Extension ready — load project root as unpacked extension in chrome://extensions'"
   },
   "dependencies": {
     "lucide-react": "^0.275.0",
