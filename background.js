@@ -1,7 +1,6 @@
 import {
-    createFolder, saveSession, setActiveSession, getActiveSession,
-    getSessionsInFolder, updateTabInActiveSession, removeTabFromActiveSession,
-    deleteFolder, deleteSession, getFolders, createNewTabInActiveSession
+    createFolder, saveSession, setActiveSession, getActiveSession, setActiveSessionWindowId, getActiveSessionWindowId, getAllFolders, saveFolders, deleteFolder,
+    getSessionsInFolder, updateTabInActiveSession, removeTabFromActiveSession, renameSession, duplicateSession, deleteSession, getFolders
 } from "./storage.js";
 
 let isRestoring = false;     // Guards against autosave during session restore
@@ -9,15 +8,6 @@ let restoreHasRun = false;  // Ensures last session restore runs once per startu
 
 const UI_PATH = "dist/index.html"; 
 const UI_URL = chrome.runtime.getURL(UI_PATH);
-
-function getFavicon(url) {
-    try {
-        const domain = new URL(url).origin;
-        return `https://www.google.com/s2/favicons?sz=32&domain_url=${domain}`;
-    } catch {
-        return "";
-    }
-}
 
 function isValidURL(url) {
     if (!url || typeof url !== "string") return false;
@@ -28,6 +18,90 @@ function isValidURL(url) {
     if (url.trim() === "") return false;
     return true;
 }
+
+let reconcileDebounceTimer = null;
+let reconcileGeneration = 0;
+
+function scheduleReconcile(folderName, sessionName, windowId, delay = 300) {
+    clearTimeout(reconcileDebounceTimer);
+    const myGeneration = ++reconcileGeneration;
+
+    reconcileDebounceTimer = setTimeout(async () => {
+        // If a newer reconcile was scheduled after this one, skip — it'll run instead
+        if (myGeneration !== reconcileGeneration) return;
+        await syncSessionOrderFromWindow(folderName, sessionName, windowId);
+    }, delay);
+}
+
+const FAVICON_CACHE_KEY = "faviconCache";
+async function getCachedFavicon(url) {
+    let domain;
+    try { domain = new URL(url).origin; } catch { return ""; }
+
+    const data = await chrome.storage.local.get([FAVICON_CACHE_KEY]);
+    const cache = data[FAVICON_CACHE_KEY] || {};
+    const entry = cache[domain];
+
+    const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+    if (entry && (Date.now() - entry.cachedAt) < THIRTY_DAYS) {
+        return entry.dataUrl;
+    }
+
+    try {
+        const res = await fetch(`https://www.google.com/s2/favicons?sz=32&domain_url=${domain}`);
+        const blob = await res.blob();
+        const dataUrl = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+        });
+        cache[domain] = { dataUrl, cachedAt: Date.now() };
+        await chrome.storage.local.set({ [FAVICON_CACHE_KEY]: cache });
+        return dataUrl;
+    } catch {
+        return "";
+    }
+}
+
+
+const RECONCILE_ALARM_NAME = "periodic-session-reconcile";
+const RECONCILE_INTERVAL_MINUTES = 5;
+
+chrome.runtime.onInstalled.addListener(() => {
+    chrome.alarms.create(RECONCILE_ALARM_NAME, {
+        periodInMinutes: RECONCILE_INTERVAL_MINUTES
+    });
+});
+
+chrome.runtime.onStartup.addListener(() => {
+    chrome.alarms.create(RECONCILE_ALARM_NAME, {
+        periodInMinutes: RECONCILE_INTERVAL_MINUTES
+    });
+});
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+    if (alarm.name !== RECONCILE_ALARM_NAME) return;
+    if (isRestoring) return;
+
+    try {
+        const active = await getActiveSession();
+        if (!active) return;
+
+        const activeWindowId = await getActiveSessionWindowId();
+        if (activeWindowId == null) return;
+
+        try {
+            await chrome.windows.get(activeWindowId);
+        } catch {
+            return; // window was closed; nothing to reconcile
+        }
+
+        scheduleReconcile(active.folder, active.session, activeWindowId);
+    } catch (e) {
+        console.error("Periodic reconcile failed:", e);
+    }
+});
 
 // Ensures the TabMax UI tab exists, pinned at index 0
 async function ensureTabMaxInWindow(windowId) {
@@ -79,36 +153,52 @@ async function clearNonTabMaxTabs(windowId, exceptTabId) {
     return toRemove;
 }
 
-// Persist current window tabs as a session snapshot
+async function buildSessionSnapshot(windowId) {
+    const tabs = await chrome.tabs.query({ windowId });
+
+    const filteredTabs = tabs.filter(tab => {
+        const url = tab.url || "";
+        return (
+            url.startsWith("http://") ||
+            url.startsWith("https://") ||
+            url.startsWith("file://") ||
+            url.startsWith("data:")
+        );
+    });
+
+    return filteredTabs.map(tab => ({
+        id: tab.id,
+        url: tab.url || "",
+        title: tab.title || "",
+        favicon: tab.favIconUrl || getCachedFavicon(tab.url),
+        active: !!tab.active
+    }));
+}
+
 async function saveCurrentSession(folderName, sessionName) {
     try {
-        const tabs = await chrome.tabs.query({ currentWindow: true });
-
-        // Filter to persistable URLs only
-        const filteredTabs = tabs.filter(tab => {
-            const url = tab.url || "";
-            return (
-                url.startsWith("http://") ||
-                url.startsWith("https://") ||
-                url.startsWith("file://") ||   
-                url.startsWith("data:")     
-            );
-        });
-
-        const formatted = filteredTabs.map(tab => ({
-            id: tab.id,
-            url: tab.url || "",
-            title: tab.title || "",
-            favicon: tab.favIconUrl || getFavicon(tab.url),
-            active: !!tab.active
-        }));
-
+        const win = await chrome.windows.getCurrent();
+        const formatted = await buildSessionSnapshot(win.id);
         await saveSession(folderName, sessionName, formatted);
         return { success: true };
-
     } catch (e) {
         console.error("Error saving session:", e);
         return { success: false, error: e.message };
+    }
+}
+
+async function syncSessionOrderFromWindow(folderName, sessionName, windowId) {
+    try {
+        const formatted = await buildSessionSnapshot(windowId);
+        const sessions = await getSessionsInFolder(folderName);
+        const current = sessions[sessionName] || [];
+
+        const unchanged = JSON.stringify(current) === JSON.stringify(formatted);
+        if (unchanged) return; 
+
+        await saveSession(folderName, sessionName, formatted);
+    } catch (e) {
+        console.error("syncSessionOrderFromWindow failed:", e);
     }
 }
 
@@ -158,6 +248,7 @@ async function restoreSession(folderName, sessionName, { force = false } = {}) {
                 index: 1,
             });
             await setActiveSession(folderName, sessionName);
+            await setActiveSessionWindowId(win.id);
             await saveCurrentSession(folderName, sessionName); // re-snapshot with real IDs
             finish();
             return;
@@ -190,6 +281,7 @@ async function restoreSession(folderName, sessionName, { force = false } = {}) {
                 index: 1,
             });
             await setActiveSession(folderName, sessionName);
+            await setActiveSessionWindowId(win.id);
             await saveCurrentSession(folderName, sessionName); // re-snapshot with real IDs
             finish();
             return;
@@ -206,6 +298,7 @@ async function restoreSession(folderName, sessionName, { force = false } = {}) {
         await chrome.tabs.update(createdIds[targetIndex], { active: true });
 
         await setActiveSession(folderName, sessionName);
+        await setActiveSessionWindowId(win.id);
         await saveCurrentSession(folderName, sessionName); // re-snapshot with real IDs
 
     } catch (err) {
@@ -239,6 +332,7 @@ async function createAndSwitchToSession(folderName, sessionName) {
         const newTab = await chrome.tabs.create({ url: "chrome://newtab", windowId: win.id, active: true });
 
         await setActiveSession(folderName, sessionName);
+        await setActiveSessionWindowId(win.id);
 
         return { success: true, tabId: newTab.id };
     } catch (err) {
@@ -321,7 +415,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             } else if (msg.type === "DELETE_SESSION") {
                 const result = await deleteSession(msg.folderName, msg.sessionName);
                 sendResponse(result);
-
+            } else if (msg.type === "RENAME_SESSION") {
+                const result = await renameSession(msg.folderName, msg.oldSessionName, msg.newSessionName);
+                sendResponse(result);
+            } else if (msg.type === "DUPLICATE_SESSION") {
+                const result = await duplicateSession(msg.folderName, msg.sessionName, msg.newSessionName);
+                sendResponse(result);
             } else {
                 sendResponse({ success: false, error: `Unknown message type: ${msg.type}` });
             }
@@ -332,22 +431,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     })();
 
     return true;
-});
-
-// Persist newly created tabs (including duplicates)
-chrome.tabs.onCreated.addListener(async (tab) => {
-    try {
-        if (isRestoring) return;
-
-        if (!tab || !isValidURL(tab.pendingUrl || tab.url)) return;
-        
-        const win = await chrome.windows.getCurrent();
-        if (tab.windowId !== win.id) return;
-
-        await createNewTabInActiveSession(tab);
-    } catch (e) {
-        console.error("Autosave onCreated failed:", e);
-    } 
 });
  
 // Update active tab state, skipping tabs still being created
@@ -379,28 +462,40 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
     }
 });
 
+chrome.tabs.onMoved.addListener((tabId, moveInfo) => {
+    if (isRestoring) return;
+
+    (async () => {
+        const active = await getActiveSession();
+        if (!active) return;
+
+        const activeWindowId = await getActiveSessionWindowId();
+        if (moveInfo.windowId !== activeWindowId) return;
+
+        scheduleReconcile(active.folder, active.session, moveInfo.windowId);
+    })();
+});
+
 // Autosave meaningful tab updates after creation settles
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     try {
         if (isRestoring) return;
-
-        if (!changeInfo.status &&
-            !changeInfo.title &&
-            !changeInfo.favIconUrl &&
-            !changeInfo.url) {
-            return;
-        }
-
         if (!isValidURL(tab.url)) return;
 
         const active = await getActiveSession();
         if (!active) return;
 
-        const win = await chrome.windows.getCurrent();
-        if (tab.windowId !== win.id) return;
+        const activeWindowId = await getActiveSessionWindowId();
+        if (tab.windowId !== activeWindowId) return;
 
-        await updateTabInActiveSession(tab, { source: "updated", changeInfo });
+        if (changeInfo.status === "complete") {
+            scheduleReconcile(active.folder, active.session, tab.windowId);
+            return;
+        }
 
+        if (changeInfo.title || changeInfo.favIconUrl || changeInfo.url) {
+            await updateTabInActiveSession(tab, { source: "updated", changeInfo });
+        }
     } catch (e) {
         console.error("Autosave onUpdated failed:", e);
     }
@@ -433,6 +528,78 @@ chrome.action.onClicked.addListener(async () => {
 
     chrome.tabs.move(tab.id, { index: 0 });
 });
+
+async function importFolders(importedData) {
+    if (!importedData || typeof importedData !== 'object') {
+        return { success: false, error: "INVALID_FORMAT" };
+    }
+
+    const folders = await getAllFolders();
+    const importedFolderNames = [];
+
+    for (const [folderName, folderData] of Object.entries(importedData)) {
+        if (!folderData?.sessions || typeof folderData.sessions !== 'object') continue;
+
+        let targetFolderName;
+
+        if (folderName === 'default') {
+            // Always merge into the existing default folder — never duplicate it
+            targetFolderName = 'default';
+            if (!folders[targetFolderName]) {
+                folders[targetFolderName] = { sessions: {} };
+            }
+        } else {
+            targetFolderName = folderName;
+            let suffix = 1;
+            while (folders[targetFolderName]) {
+                targetFolderName = `${folderName} (imported${suffix > 1 ? ' ' + suffix : ''})`;
+                suffix++;
+            }
+            folders[targetFolderName] = { sessions: {} };
+        }
+
+        for (const [sessionName, tabs] of Object.entries(folderData.sessions)) {
+            if (!Array.isArray(tabs)) continue;
+
+            // Auto-rename on session-name collision, in every folder including default
+            let targetSessionName = sessionName;
+            let sSuffix = 1;
+            while (folders[targetFolderName].sessions[targetSessionName]) {
+                targetSessionName = `${sessionName} (imported${sSuffix > 1 ? ' ' + sSuffix : ''})`;
+                sSuffix++;
+            }
+
+            folders[targetFolderName].sessions[targetSessionName] = tabs.map(t => ({
+                id: null,
+                url: t.url || "",
+                title: t.title || "",
+                favicon: t.favicon || "",
+                active: false
+            }));
+        }
+
+        importedFolderNames.push(targetFolderName);
+    }
+
+    await saveFolders(folders);
+    return { success: true, importedFolderNames };
+}
+
+
+const exportAll = async () => {
+    const folders = await StorageClient.getAll(); // fresh read, not stale React state
+    const json = JSON.stringify(folders, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `tabmax-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+};
 
 // TODO:
 // chrome.runtime.onInstalled.addListener(({reason}) => { 
